@@ -41,7 +41,7 @@ Available voices: `serena, vivian, uncle_fu, ryan, aiden, ono_anna, sohee, eric,
 ./setup.sh
 ```
 
-Installs Node.js dependencies, the `pi` CLI (`@earendil-works/pi-coding-agent`), and the Python TTS venv. See setup.sh for full details.
+Installs Node.js dependencies, the `pi` CLI (`@earendil-works/pi-coding-agent`), backend Python venv, TTS Python venv, and configures Google Cloud ADC.
 
 ## Key architecture decisions
 

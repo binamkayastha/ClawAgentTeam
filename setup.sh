@@ -34,27 +34,52 @@ if (( PYTHON_MAJOR < 3 || (PYTHON_MAJOR == 3 && PYTHON_MINOR < 11) )); then
   exit 1
 fi
 
+# ── gcloud CLI ────────────────────────────────────────────────────────────────
+if ! command -v gcloud &>/dev/null; then
+  echo "ERROR: gcloud CLI is not installed." >&2
+  echo "Install it from https://cloud.google.com/sdk/docs/install, then re-run this script." >&2
+  exit 1
+fi
+
 # ── pi CLI ────────────────────────────────────────────────────────────────────
 echo "Installing pi coding agent..."
 npm install -g @earendil-works/pi-coding-agent
 
-# ── Electron app ─────────────────────────────────────────────────────────────
+# ── Electron app ──────────────────────────────────────────────────────────────
 echo "Installing Electron app dependencies..."
 npm install
 
-# ── Python venv + mlx-audio ───────────────────────────────────────────────────
-echo "Setting up Python venv and installing mlx-audio..."
+# ── Backend venv ──────────────────────────────────────────────────────────────
+echo "Setting up backend Python venv..."
+if [[ ! -x backend/.venv/bin/python ]]; then
+  python3 -m venv backend/.venv
+fi
+backend/.venv/bin/python -m pip install -q -U pip
+backend/.venv/bin/python -m pip install -q -r backend/requirements.txt
+
+# ── TTS venv ──────────────────────────────────────────────────────────────────
+echo "Setting up TTS Python venv..."
 if [[ ! -x .venv/bin/python ]]; then
   python3 -m venv .venv
 fi
 .venv/bin/python -m pip install -q -U pip
 .venv/bin/python -m pip install -q -r requirements.txt
 
+# ── Google Cloud ADC ─────────────────────────────────────────────────────────
+echo ""
+if gcloud auth application-default print-access-token &>/dev/null; then
+  echo "Google Cloud ADC: already configured."
+else
+  echo "Google Cloud ADC is not configured. Running login..."
+  gcloud auth application-default login
+fi
+
 echo ""
 echo "Setup complete."
 echo ""
-echo "  Electron app:  npm start"
-echo "  TTS:           ./run \"Hello world\""
+echo "  Backend:   cd backend && source .venv/bin/activate && uvicorn server:app --reload"
+echo "  Frontend:  npm start"
+echo "  TTS:       ./run \"Hello world\""
 echo ""
 echo "Before running pi agents, set your provider API key, e.g.:"
 echo "  export ANTHROPIC_API_KEY=..."
