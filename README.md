@@ -2,6 +2,17 @@
 
 One-command local text-to-speech using Qwen3-TTS on Apple Silicon macOS.
 
+## Electron PI Agent Flow
+
+Run the Electron folder-to-agent app:
+
+```bash
+npm install
+npm start
+```
+
+The app opens with the folder selection flow, then starts one `pi` subprocess per agent card from the selected folder and streams that session output into the card chat.
+
 ## Requirements
 
 - Apple Silicon Mac

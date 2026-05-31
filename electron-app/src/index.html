@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PI Agent Flow</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="emptyState" class="screen screen-centered">
+        <div class="folder-prompt">
+          <h1>Add folder to Start</h1>
+          <button id="chooseFolderButton" class="primary-action" type="button">
+            <span aria-hidden="true">+</span>
+            <span>ADD FOLDER</span>
+          </button>
+        </div>
+      </section>
+
+      <section id="setupState" class="screen hidden">
+        <div class="top-strip">
+          <div class="folder-chip" id="setupFolderName">Folder name</div>
+          <button id="createFirstAgentButton" class="secondary-action compact" type="button">
+            <span aria-hidden="true">+</span>
+            <span>Add Agent</span>
+          </button>
+        </div>
+        <div class="setup-message">Create Agent to get started</div>
+      </section>
+
+      <section id="agentsState" class="screen hidden">
+        <header class="workspace-header">
+          <div class="folder-chip" id="workspaceFolderName">Folder name</div>
+          <button id="addAgentButton" class="secondary-action" type="button">
+            <span aria-hidden="true">+</span>
+            <span>ADD AGENT</span>
+          </button>
+        </header>
+        <div id="agentGrid" class="agent-grid" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>
