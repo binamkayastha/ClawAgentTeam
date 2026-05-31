@@ -306,6 +306,26 @@ h1 {
   text-transform: uppercase;
 }
 
+
+.agent-model-select {
+  max-width: 150px;
+  height: 30px;
+  padding: 0 6px;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  background: #fbfffb;
+  color: var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.agent-model-select:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--line-soft);
+}
+
+
 /* CHAT LOG becomes “transcript column” */
 .chat-log {
   display: flex;
@@ -417,6 +437,71 @@ h1 {
   min-width: 48px;
 
   color: var(--muted);
+}
+
+
+.role-picker {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(25, 26, 23, 0.45);
+  z-index: 20;
+}
+
+.role-picker.hidden {
+  display: none;
+}
+
+.role-picker-card {
+  display: grid;
+  gap: 16px;
+  width: min(420px, 92vw);
+  padding: 28px;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.role-picker-card h2 {
+  color: var(--line);
+  font-size: 22px;
+  font-weight: 780;
+}
+
+.role-picker-label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.role-picker-select {
+  height: 48px;
+  padding: 0 12px;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: #fbfffb;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.role-picker-select:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--line-soft);
+}
+
+.role-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.role-picker-actions .secondary-action.compact {
+  min-width: 120px;
 }
 
 /* mobile preserved */

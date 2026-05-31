@@ -41,6 +41,20 @@
       </section>
     </main>
 
+    <div id="agentRolePicker" class="role-picker hidden" role="dialog" aria-modal="true" aria-labelledby="agentRoleTitle">
+      <div class="role-picker-card">
+        <h2 id="agentRoleTitle">Choose agent type</h2>
+        <label class="role-picker-label" for="agentRoleSelect">Agent type</label>
+        <select id="agentRoleSelect" class="role-picker-select"></select>
+        <label class="role-picker-label" for="agentModelSelect">Model</label>
+        <select id="agentModelSelect" class="role-picker-select"></select>
+        <div class="role-picker-actions">
+          <button id="agentRoleCancel" class="secondary-action compact" type="button">Cancel</button>
+          <button id="agentRoleCreate" class="secondary-action compact" type="button">Create</button>
+        </div>
+      </div>
+    </div>
+
     <script src="./renderer.js"></script>
   </body>
 </html>
