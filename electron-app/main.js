@@ -4,6 +4,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+let agentCounter = 0;
+
 let mainWindow;
 const agentProcesses = new Map();
 let cachedModels = null;
@@ -83,6 +85,23 @@ ipcMain.handle("models:list", async (_event, payload) => {
   return models;
 });
 
+ipcMain.handle("audio:transcribe", async (_event, buffer) => {
+  const { Blob } = require("node:buffer");
+  console.log("[main] audio:transcribe called, bytes:", buffer?.byteLength ?? buffer?.length);
+  try {
+    const audioBlob = new Blob([Buffer.from(buffer)], { type: "audio/webm" });
+    const form = new FormData();
+    form.append("file", audioBlob, "recording.webm");
+    const res = await fetch("http://127.0.0.1:8000/transcribe", { method: "POST", body: form });
+    const data = await res.json();
+    console.log("[main] transcription result:", data);
+    return data;
+  } catch (err) {
+    console.error("[main] transcription error:", err.message);
+    throw err;
+  }
+});
+
 ipcMain.handle("agent:create", async (_event, payload) => {
   if (!payload?.folderPath || !fs.existsSync(payload.folderPath)) {
     throw new Error("Choose an existing folder before creating a PI agent.");
@@ -97,6 +116,7 @@ ipcMain.handle("agent:create", async (_event, payload) => {
   if (payload.modelId) {
     spawnArgs.push("--model", payload.modelId);
   }
+  console.log("[main] spawning pi with args:", spawnArgs, "cwd:", payload.folderPath);
   const child = spawn("pi", spawnArgs, {
     cwd: payload.folderPath,
     env: {
@@ -121,10 +141,12 @@ ipcMain.handle("agent:create", async (_event, payload) => {
   agentProcesses.set(id, agentProcess);
 
   child.stdout.on("data", (chunk) => {
+    console.log("[main] stdout:", chunk.toString("utf8").slice(0, 200));
     readRpcOutput(agentProcess, chunk);
   });
 
   child.stderr.on("data", (chunk) => {
+    console.log("[main] stderr:", chunk.toString("utf8").slice(0, 200));
     mainWindow?.webContents.send("agent:output", {
       id,
       role: "system",
@@ -132,7 +154,12 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     });
   });
 
+  child.on("spawn", () => {
+    console.log("[main] pi process spawned, pid:", child.pid);
+  });
+
   child.on("error", (error) => {
+    console.error("[main] pi spawn error:", error.message);
     mainWindow?.webContents.send("agent:output", {
       id,
       role: "system",
@@ -141,6 +168,7 @@ ipcMain.handle("agent:create", async (_event, payload) => {
   });
 
   child.on("exit", (code, signal) => {
+    console.log("[main] pi exited, code:", code, "signal:", signal);
     agentProcesses.delete(id);
     mainWindow?.webContents.send("agent:output", {
       id,
@@ -185,6 +213,7 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     role: payload.roleLabel || null,
     folderName: payload.folderName,
     folderPath: payload.folderPath,
+    colorIndex: (agentCounter++) % 8,
     pid: child.pid,
     startedAt: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     transcript
@@ -310,6 +339,7 @@ function sendRpcCommand(agentProcess, command) {
     ...command
   };
 
+  console.log("[main] sendRpcCommand:", JSON.stringify(message).slice(0, 200));
   agentProcess.child.stdin.write(`${JSON.stringify(message)}\n`);
 }
 
@@ -409,8 +439,11 @@ function handleRpcResponse(agentProcess, response) {
 function handleMessageUpdate(agentProcess, message) {
   const event = message.assistantMessageEvent;
   if (!event) {
+    console.log("[main] message_update: no assistantMessageEvent");
     return;
   }
+
+  console.log("[main] message_update event.type:", event.type, "delta:", (event.delta || "").slice(0, 100));
 
   if (event.type === "text_delta" && event.delta) {
     agentProcess.currentResponseText += event.delta;

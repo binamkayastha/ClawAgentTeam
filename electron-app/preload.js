@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("piFlow", {
   setModel: (payload) => ipcRenderer.invoke("agent:setModel", payload),
   claimMic: (payload) => ipcRenderer.invoke("mic:claim", payload),
   releaseMic: () => ipcRenderer.invoke("mic:release"),
+  transcribeAudio: (buffer) => ipcRenderer.invoke("audio:transcribe", buffer),
   onAgentOutput: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("agent:output", handler);

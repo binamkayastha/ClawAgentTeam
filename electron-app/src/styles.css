@@ -1,14 +1,35 @@
 :root {
   color-scheme: light;
-  --paper: #f7f8f6;
-  --ink: #191a17;
-  --muted: #6d7169;
-  --line: #1b70c9;
-  --line-soft: rgba(27, 112, 201, 0.2);
-  --panel: #ffffff;
-  --agent-line: #20201d;
-  --accent: #d94235;
-  --shadow: 0 18px 60px rgba(29, 38, 49, 0.08);
+
+  /* Editorial paper system */
+  --paper: #f5f3ef;
+  --ink: #171717;
+  --muted: #6b6b6b;
+
+  /* ultra-subtle structure */
+  --line: rgba(20, 20, 20, 0.10);
+  --line-soft: rgba(20, 20, 20, 0.06);
+
+  --panel: rgba(255, 255, 255, 0.78);
+
+  /* default accent (muted editorial blue) */
+  --accent: #4f5d75;
+
+  /* layered editorial depth */
+  --shadow:
+    0 2px 10px rgba(0,0,0,0.04),
+    0 18px 50px rgba(0,0,0,0.06);
+
+  --shadow-hover:
+    0 8px 24px rgba(0,0,0,0.07),
+    0 30px 70px rgba(0,0,0,0.10);
+
+  /* agent ink identities (used subtly via inheritance) */
+  --ink-blue: #4f5d75;
+  --ink-green: #4a5d4f;
+  --ink-rust: #7a4a3a;
+  --ink-violet: #5a4b7a;
+  --ink-gray: #2d2d2d;
 }
 
 * {
@@ -19,9 +40,32 @@ body {
   margin: 0;
   min-width: 760px;
   min-height: 580px;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+background:
+    radial-gradient(circle at 20% 10%, rgba(79,93,117,0.06), transparent 40%),
+    radial-gradient(circle at 80% 90%, rgba(122,74,58,0.04), transparent 45%),
+
+    /* subtle paper grain */
+    repeating-linear-gradient(
+      0deg,
+      rgba(0,0,0,0.015),
+      rgba(0,0,0,0.015) 1px,
+      transparent 1px,
+      transparent 2px
+    ),
+
+    var(--paper);
+
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -29,9 +73,10 @@ input {
   font: inherit;
 }
 
+/* App shell feels like a printed spread margin */
 .app-shell {
   min-height: 100vh;
-  padding: 36px;
+  padding: 40px;
 }
 
 .session-strip {
@@ -74,11 +119,16 @@ input {
   text-overflow: ellipsis;
 }
 
+/* Main container becomes “sheet on paper” */
 .screen {
-  min-height: calc(100vh - 116px);
-  border: 2px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.62);
+  min-height: calc(100vh - 80px);
+
+  border: 1px solid var(--line);
+  border-radius: 18px;
+
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+
   box-shadow: var(--shadow);
 }
 
@@ -91,138 +141,211 @@ input {
   display: none;
 }
 
+/* Editorial prompt layout */
 .folder-prompt {
   display: grid;
   justify-items: center;
   gap: 18px;
 }
 
+/* HEADINGS — editorial identity shift */
 h1,
 h2,
 p {
   margin: 0;
 }
 
+/* Serif headline = magazine identity */
 h1 {
-  color: var(--line);
-  font-size: 28px;
-  font-weight: 730;
+  font-family: "Fraunces", Georgia, serif;
+
+  color: var(--ink);
+  font-size: 2.4rem;
+  font-weight: 520;
+
+  letter-spacing: -0.02em;
 }
 
+/* Buttons become “controls”, not UI blocks */
 .primary-action,
 .secondary-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
+
   min-width: 220px;
-  min-height: 58px;
-  border: 2px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--line);
-  font-size: 18px;
-  font-weight: 780;
-  letter-spacing: 0;
+  min-height: 54px;
+
+  border: 1px solid var(--line);
+  border-radius: 12px;
+
+  background: rgba(255, 255, 255, 0.85);
+
+  color: var(--ink);
+
+  font-size: 15px;
+  font-weight: 550;
+  font-family: "Fraunces", Georgia, serif;
+
   cursor: pointer;
+
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 
 .primary-action {
   min-width: 320px;
-  min-height: 72px;
-  font-size: 25px;
+  min-height: 66px;
+
+  font-size: 18px;
+  font-weight: 600;
+
+  border-color: rgba(79,93,117,0.25);
 }
 
 .secondary-action.compact {
   min-width: 176px;
-  min-height: 46px;
-  font-size: 15px;
+  min-height: 42px;
+  font-size: 13px;
 }
 
+/* subtle editorial hover (not “button hover”) */
 .primary-action:hover,
 .secondary-action:hover {
-  background: #edf6ff;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow);
+  background: #fff;
 }
 
+/* Top strips feel like section headers in a publication */
 .top-strip,
 .workspace-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
+
   padding: 28px 34px;
 }
 
+.workspace-header {
+  min-height: 110px;
+}
+
+/* Setup message becomes “statement text” */
 .setup-message {
   display: grid;
   min-height: calc(100vh - 210px);
   place-items: center;
-  color: var(--line);
-  font-size: 26px;
-  font-weight: 760;
+
+  color: var(--muted);
+  font-size: 20px;
+  font-weight: 450;
+  letter-spacing: -0.01em;
 }
 
+/* Folder chip becomes a label, not a pill */
 .folder-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+
   max-width: min(360px, 38vw);
   min-width: 180px;
-  min-height: 48px;
-  overflow: hidden;
-  padding: 0 18px;
-  border: 2px solid var(--line);
-  border-radius: 8px;
-  background: #fbfffb;
-  color: var(--line);
-  font-size: 14px;
-  font-weight: 720;
-  text-overflow: ellipsis;
+  min-height: 42px;
+
+  padding: 0 14px;
+
+  border: 1px solid var(--line);
+  border-radius: 999px;
+
+  background: rgba(255,255,255,0.75);
+
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.workspace-header {
-  min-height: 116px;
-}
+/* Agent color identities — cycles every 8 agents */
+.agent-color-0 { --agent-accent: #4f5d75; --agent-tint: rgba(79,93,117,0.07); }
+.agent-color-1 { --agent-accent: #7a4a3a; --agent-tint: rgba(122,74,58,0.07); }
+.agent-color-2 { --agent-accent: #4a5d4f; --agent-tint: rgba(74,93,79,0.07); }
+.agent-color-3 { --agent-accent: #5a4b7a; --agent-tint: rgba(90,75,122,0.07); }
+.agent-color-4 { --agent-accent: #7a6a3a; --agent-tint: rgba(122,106,58,0.07); }
+.agent-color-5 { --agent-accent: #3a6a7a; --agent-tint: rgba(58,106,122,0.07); }
+.agent-color-6 { --agent-accent: #7a3a5a; --agent-tint: rgba(122,58,90,0.07); }
+.agent-color-7 { --agent-accent: #3a5a3a; --agent-tint: rgba(58,90,58,0.07); }
 
+/* GRID stays structured (no asymmetry per your request) */
 .agent-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 28px;
-  align-items: start;
-  padding: 16px 34px 34px;
+
+  padding: 18px 34px 34px;
 }
 
+/* AGENT CARD = “column in a magazine” */
 .agent-card {
   display: grid;
   grid-template-rows: auto minmax(180px, 1fr) auto;
-  min-height: 290px;
+
+  min-height: 300px;
   max-height: 440px;
-  border: 2px solid var(--agent-line);
-  border-radius: 8px;
-  background: #fffefa;
+
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  border-top: 2px solid var(--agent-accent, var(--accent));
+
+  background: var(--agent-tint, var(--panel));
+
   overflow: hidden;
+
+  box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
+.agent-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
+}
+
+/* HEADER becomes editorial masthead */
 .agent-card-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+
   padding: 18px 20px 10px;
 }
 
+/* agent title = editorial section title */
 .agent-card h2 {
-  font-size: 23px;
-  line-height: 1.1;
-  font-weight: 780;
+  font-family: "Fraunces", Georgia, serif;
+
+  font-size: 1.05rem;
+  font-weight: 520;
+
+  letter-spacing: -0.01em;
+
+  color: var(--agent-accent, var(--ink));
 }
 
+/* small label = publication metadata */
 .agent-card-header span {
   color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
+  font-size: 10px;
+
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
+
 
 .agent-model-select {
   max-width: 150px;
@@ -242,84 +365,122 @@ h1 {
   box-shadow: 0 0 0 3px var(--line-soft);
 }
 
+
+/* CHAT LOG becomes “transcript column” */
 .chat-log {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+
   overflow: auto;
-  padding: 8px 18px 16px;
+
+  padding: 12px 18px 16px;
 }
 
+/* messages become paragraph blocks, not bubbles */
 .chat-message {
-  max-width: 92%;
-  padding: 9px 11px;
-  border-radius: 8px;
-  line-height: 1.35;
+  max-width: 94%;
+
+  padding: 10px 12px;
+
+  border-radius: 12px;
+
+  line-height: 1.55;
   font-size: 13px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+/* system/agent = neutral manuscript text */
 .chat-message.system,
 .chat-message.agent,
 .chat-message.tool {
   align-self: flex-start;
-  background: #eef2ea;
-  color: #30342f;
+
+  background: transparent;
+
+  color: #2b2b2b;
 }
 
+/* TOOL output = code inset in manuscript */
 .chat-message.tool {
   width: 100%;
   max-width: 100%;
-  border: 1px solid #d7ddd1;
-  background: #fafbf7;
-  color: #3e423b;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  border-left: 2px solid rgba(79,93,117,0.25);
+
+  padding-left: 12px;
+
+  background: rgba(250,250,250,0.6);
+
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+
+  font-size: 12px;
+  color: #3a3a3a;
+
   white-space: pre-wrap;
 }
 
+/* USER = slightly colored “voice” */
 .chat-message.user {
   align-self: flex-end;
-  background: #eaf3ff;
-  color: #143f6e;
+
+  background: rgba(79,93,117,0.08);
+  color: #1f2a44;
 }
 
+/* INPUT = editorial control bar */
 .chat-entry {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
+
   padding: 12px 16px 16px;
 }
 
 .chat-entry input {
-  min-width: 0;
   height: 42px;
-  border: 2px solid var(--accent);
-  border-radius: 8px;
+
+  border: 1px solid rgba(79,93,117,0.25);
+  border-radius: 12px;
+
   padding: 0 12px;
-  outline: none;
+
   background: #fff;
+
+  outline: none;
 }
 
 .chat-entry input:focus {
-  box-shadow: 0 0 0 3px rgba(217, 66, 53, 0.18);
+  box-shadow: 0 0 0 3px rgba(79,93,117,0.15);
 }
 
+/* buttons become understated controls */
 .chat-entry button {
   height: 42px;
-  border: 2px solid var(--agent-line);
-  border-radius: 8px;
-  background: #f7f8f6;
-  color: var(--ink);
-  font-weight: 720;
+
+  border: 1px solid var(--line);
+  border-radius: 12px;
+
+  background: rgba(255,255,255,0.8);
+
+  font-weight: 550;
+
   cursor: pointer;
+}
+
+.chat-entry button:hover {
+  transform: translateY(-1px);
 }
 
 .chat-entry .mic-button {
   min-width: 48px;
+
+  color: var(--muted);
   padding: 0 10px;
   border-color: var(--line);
   color: var(--line);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .chat-entry .mic-button.active {
@@ -332,6 +493,17 @@ h1 {
   background: #eaf3ff;
 }
 
+.chat-entry .mic-button.recording {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  animation: pulse-mic 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-mic {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
 .role-picker {
   position: fixed;
   inset: 0;
@@ -396,6 +568,7 @@ h1 {
   min-width: 120px;
 }
 
+/* mobile preserved */
 @media (max-width: 860px) {
   body {
     min-width: 0;
@@ -415,27 +588,20 @@ h1 {
 
   .primary-action {
     min-width: min(320px, 76vw);
-    font-size: 22px;
   }
 
   .top-strip,
   .workspace-header {
-    padding: 20px;
+    padding: 18px;
   }
 
   .workspace-header {
-    align-items: stretch;
     flex-direction: column-reverse;
-  }
-
-  .secondary-action,
-  .folder-chip {
-    width: 100%;
-    max-width: none;
+    align-items: stretch;
   }
 
   .agent-grid {
     grid-template-columns: 1fr;
-    padding: 8px 20px 24px;
+    padding: 10px 18px 24px;
   }
 }
