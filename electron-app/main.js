@@ -5,6 +5,7 @@ const path = require("node:path");
 
 let mainWindow;
 const agentProcesses = new Map();
+let cachedModels = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -63,6 +64,17 @@ ipcMain.handle("folder:choose", async () => {
   };
 });
 
+ipcMain.handle("models:list", async (_event, payload) => {
+  if (Array.isArray(cachedModels)) {
+    return cachedModels;
+  }
+
+  const cwd = payload?.folderPath && fs.existsSync(payload.folderPath) ? payload.folderPath : process.cwd();
+  const models = await fetchAvailableModels(cwd);
+  cachedModels = models;
+  return models;
+});
+
 ipcMain.handle("audio:transcribe", async (_event, buffer) => {
   const { Blob } = require("node:buffer");
   console.log("[main] audio:transcribe called, bytes:", buffer?.byteLength ?? buffer?.length);
@@ -87,7 +99,15 @@ ipcMain.handle("agent:create", async (_event, payload) => {
 
   const now = new Date();
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const child = spawn("pi", ["--mode", "rpc"], {
+  const spawnArgs = ["--mode", "rpc"];
+  if (payload.provider) {
+    spawnArgs.push("--provider", payload.provider);
+  }
+  if (payload.modelId) {
+    spawnArgs.push("--model", payload.modelId);
+  }
+  console.log("[main] spawning pi with args:", spawnArgs, "cwd:", payload.folderPath);
+  const child = spawn("pi", spawnArgs, {
     cwd: payload.folderPath,
     env: {
       ...process.env,
@@ -109,10 +129,12 @@ ipcMain.handle("agent:create", async (_event, payload) => {
   agentProcesses.set(id, agentProcess);
 
   child.stdout.on("data", (chunk) => {
+    console.log("[main] stdout:", chunk.toString("utf8").slice(0, 200));
     readRpcOutput(agentProcess, chunk);
   });
 
   child.stderr.on("data", (chunk) => {
+    console.log("[main] stderr:", chunk.toString("utf8").slice(0, 200));
     mainWindow?.webContents.send("agent:output", {
       id,
       role: "system",
@@ -120,7 +142,12 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     });
   });
 
+  child.on("spawn", () => {
+    console.log("[main] pi process spawned, pid:", child.pid);
+  });
+
   child.on("error", (error) => {
+    console.error("[main] pi spawn error:", error.message);
     mainWindow?.webContents.send("agent:output", {
       id,
       role: "system",
@@ -129,6 +156,7 @@ ipcMain.handle("agent:create", async (_event, payload) => {
   });
 
   child.on("exit", (code, signal) => {
+    console.log("[main] pi exited, code:", code, "signal:", signal);
     agentProcesses.delete(id);
     mainWindow?.webContents.send("agent:output", {
       id,
@@ -137,25 +165,45 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     });
   });
 
+  const roleLabel = payload.roleLabel || "Pi Agent";
+
   sendRpcCommand(agentProcess, {
     type: "set_session_name",
-    name: `${payload.folderName} - ${now.toLocaleString()}`
+    name: `${roleLabel} - ${payload.folderName} - ${now.toLocaleString()}`
   });
   sendRpcCommand(agentProcess, { type: "get_state" });
+  sendRpcCommand(agentProcess, { type: "get_available_models" });
+
+  if (payload.systemPrompt) {
+    sendRpcCommand(agentProcess, {
+      type: "prompt",
+      message: payload.systemPrompt
+    });
+  }
+
+  const transcript = [
+    {
+      role: "system",
+      text: `PI RPC session starting for ${payload.folderName}.`
+    }
+  ];
+
+  if (payload.roleLabel) {
+    transcript.push({
+      role: "system",
+      text: `Agent role: ${payload.roleLabel}.`
+    });
+  }
 
   return {
     id,
-    title: `Pi Agent #${payload.index}`,
+    title: `${roleLabel} #${payload.index}`,
+    role: payload.roleLabel || null,
     folderName: payload.folderName,
     folderPath: payload.folderPath,
     pid: child.pid,
     startedAt: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    transcript: [
-      {
-        role: "system",
-        text: `PI RPC session starting for ${payload.folderName}.`
-      }
-    ]
+    transcript
   };
 });
 
@@ -174,6 +222,81 @@ ipcMain.handle("agent:message", async (_event, payload) => {
   return { ok: true };
 });
 
+ipcMain.handle("agent:setModel", async (_event, payload) => {
+  const agentProcess = agentProcesses.get(payload.id);
+  if (!agentProcess || agentProcess.child.killed || !agentProcess.child.stdin.writable) {
+    return { ok: false, error: "PI session is not running." };
+  }
+
+  sendRpcCommand(agentProcess, {
+    type: "set_model",
+    provider: payload.provider,
+    modelId: payload.modelId
+  });
+
+  return { ok: true };
+});
+
+function fetchAvailableModels(cwd) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (models) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        child.kill();
+      } catch {
+        // ignore
+      }
+      resolve(Array.isArray(models) ? models : []);
+    };
+
+    const child = spawn("pi", ["--mode", "rpc"], {
+      cwd,
+      env: {
+        ...process.env,
+        TERM: "xterm-256color",
+        FORCE_COLOR: "0",
+        NO_COLOR: "1"
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    let buffer = "";
+    child.stdout.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      let lineEnd = buffer.indexOf("\n");
+      while (lineEnd !== -1) {
+        const rawLine = buffer.slice(0, lineEnd).replace(/\r$/, "");
+        buffer = buffer.slice(lineEnd + 1);
+        if (rawLine.trim()) {
+          let message;
+          try {
+            message = JSON.parse(rawLine);
+          } catch {
+            message = null;
+          }
+          if (message?.type === "response" && message.command === "get_available_models") {
+            finish(message.success ? message.data?.models : []);
+            return;
+          }
+        }
+        lineEnd = buffer.indexOf("\n");
+      }
+    });
+
+    child.on("error", () => finish([]));
+    child.on("exit", () => finish([]));
+
+    const timer = setTimeout(() => finish([]), 15000);
+
+    child.stdin.write(`${JSON.stringify({ id: "models-discovery", type: "get_available_models" })}\n`);
+  });
+}
+
 function cleanOutput(chunk) {
   return chunk
     .toString("utf8")
@@ -191,6 +314,7 @@ function sendRpcCommand(agentProcess, command) {
     ...command
   };
 
+  console.log("[main] sendRpcCommand:", JSON.stringify(message).slice(0, 200));
   agentProcess.child.stdin.write(`${JSON.stringify(message)}\n`);
 }
 
@@ -266,8 +390,18 @@ function handleRpcResponse(agentProcess, response) {
   if (response.command === "get_state" && response.data) {
     agentProcess.isStreaming = Boolean(response.data.isStreaming);
     emitAgentStatus(agentProcess.id, agentProcess.isStreaming ? "running" : "idle", {
-      model: response.data.model?.name || response.data.model?.id || null,
+      model: response.data.model || null,
       sessionName: response.data.sessionName || null
+    });
+  }
+
+  if (response.command === "get_available_models" && response.data) {
+    emitAgentModels(agentProcess.id, Array.isArray(response.data.models) ? response.data.models : []);
+  }
+
+  if (response.command === "set_model" && response.data) {
+    emitAgentStatus(agentProcess.id, agentProcess.isStreaming ? "running" : "idle", {
+      model: response.data
     });
   }
 }
@@ -275,8 +409,11 @@ function handleRpcResponse(agentProcess, response) {
 function handleMessageUpdate(agentProcess, message) {
   const event = message.assistantMessageEvent;
   if (!event) {
+    console.log("[main] message_update: no assistantMessageEvent");
     return;
   }
+
+  console.log("[main] message_update event.type:", event.type, "delta:", (event.delta || "").slice(0, 100));
 
   if (event.type === "text_delta" && event.delta) {
     emitAgentOutput(agentProcess.id, "agent", event.delta, { append: true });
@@ -354,5 +491,12 @@ function emitAgentStatus(id, status, details = {}) {
     id,
     status,
     ...details
+  });
+}
+
+function emitAgentModels(id, models) {
+  mainWindow?.webContents.send("agent:models", {
+    id,
+    models
   });
 }
