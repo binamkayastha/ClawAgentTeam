@@ -46,6 +46,7 @@ const roleCreateButton = document.querySelector("#agentRoleCreate");
 const roleCancelButton = document.querySelector("#agentRoleCancel");
 
 let availableModels = null;
+let saveProjectTimer = null;
 
 function modelValue(model) {
   return `${model.provider}::${model.id}`;
@@ -123,6 +124,20 @@ function setFolder(folder) {
   showScreen("setup");
 }
 
+function setProjectAgents(agents) {
+  state.agents = (agents || []).map((agent) => ({
+    ...agent,
+    restored: true,
+    status: agent.status || "saved",
+    transcript: Array.isArray(agent.transcript) ? agent.transcript : []
+  }));
+
+  if (state.agents.length) {
+    renderAgents();
+    showScreen("agents");
+  }
+}
+
 async function chooseFolder() {
   const folder = await window.piFlow.chooseFolder();
   if (!folder) {
@@ -136,7 +151,52 @@ async function restoreStoredFolder() {
   const storedState = await window.piFlow.getStoredState();
   if (storedState.activeFolder) {
     setFolder(storedState.activeFolder);
+    setProjectAgents(storedState.activeProject?.agents);
   }
+}
+
+function scheduleProjectSave() {
+  if (!state.folder) {
+    return;
+  }
+
+  clearTimeout(saveProjectTimer);
+  saveProjectTimer = setTimeout(saveProjectNow, 250);
+}
+
+async function saveProjectNow() {
+  if (!state.folder) {
+    return;
+  }
+
+  try {
+    await window.piFlow.saveProject({
+      folderId: state.folder.id,
+      agents: state.agents.map(serializeAgent)
+    });
+  } catch (error) {
+    console.error("Failed to save project conversations", error);
+  }
+}
+
+function serializeAgent(agent) {
+  return {
+    id: agent.id,
+    title: agent.title,
+    role: agent.role || null,
+    folderName: agent.folderName,
+    folderPath: agent.folderPath,
+    startedAt: agent.startedAt,
+    status: agent.status || null,
+    model: agent.model || null,
+    modelInfo: agent.modelInfo || null,
+    restored: Boolean(agent.restored),
+    transcript: (agent.transcript || []).map((message) => ({
+      role: message.role,
+      text: message.text,
+      ...(message.replaceKey ? { replaceKey: message.replaceKey } : {})
+    }))
+  };
 }
 
 async function openRolePicker() {
@@ -192,6 +252,7 @@ async function addAgent(role, model) {
   state.agents.push(agent);
   renderAgents();
   showScreen("agents");
+  scheduleProjectSave();
 }
 
 function renderAgents() {
@@ -226,6 +287,7 @@ function createAgentCard(agent) {
     }
 
     await window.piFlow.setModel({ id: agent.id, provider: model.provider, modelId: model.modelId });
+    scheduleProjectSave();
   });
 
   header.append(title, cardModelSelect, meta);
@@ -333,12 +395,14 @@ async function handleChatSubmit(event) {
   agent.transcript.push({ role: "user", text });
   const log = form.parentElement.querySelector(".chat-log");
   renderTranscript(log, agent.transcript);
+  scheduleProjectSave();
   input.value = "";
 
   const result = await window.piFlow.sendMessage({ id: agent.id, text });
   if (!result.ok) {
     agent.transcript.push({ role: "system", text: result.error });
     renderTranscript(log, agent.transcript);
+    scheduleProjectSave();
   }
 }
 
@@ -386,6 +450,7 @@ window.piFlow.onAgentOutput((payload) => {
   if (log) {
     renderTranscript(log, agent.transcript);
   }
+  scheduleProjectSave();
 });
 
 window.piFlow.onAgentStatus((payload) => {
@@ -413,6 +478,7 @@ window.piFlow.onAgentStatus((payload) => {
     status.textContent = `${payload.status}${suffix}`;
     status.title = agent.model || "";
   }
+  scheduleProjectSave();
 });
 
 window.piFlow.onAgentModels((payload) => {
@@ -430,6 +496,7 @@ window.piFlow.onAgentModels((payload) => {
     populateModelSelect(cardModelSelect, payload.models, { includeDefault: false });
     applyCardModelSelection(cardModelSelect, agent.modelInfo);
   }
+  scheduleProjectSave();
 });
 
 showScreen("empty");

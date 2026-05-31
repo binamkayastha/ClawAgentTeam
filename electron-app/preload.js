@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("piFlow", {
   chooseFolder: () => ipcRenderer.invoke("folder:choose"),
   listModels: (payload) => ipcRenderer.invoke("models:list", payload),
   getStoredState: () => ipcRenderer.invoke("storage:get-state"),
+  saveProject: (payload) => ipcRenderer.invoke("storage:save-project", payload),
   createAgent: (payload) => ipcRenderer.invoke("agent:create", payload),
   sendMessage: (payload) => ipcRenderer.invoke("agent:message", payload),
   setModel: (payload) => ipcRenderer.invoke("agent:setModel", payload),

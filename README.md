@@ -11,7 +11,7 @@ npm install
 npm start
 ```
 
-The app opens with the folder selection flow, then starts one `pi --mode rpc` subprocess per agent card from the selected folder and streams that session output into the card chat. The chosen folder is stored in `~/.config/clawagentteam/app-state.json` so the app can restore it on reload.
+The app opens with the folder selection flow, then starts one `pi --mode rpc` subprocess per agent card from the selected folder and streams that session output into the card chat. The chosen folder and visible agent conversations are stored in `~/.config/clawagentteam/app-state.json` so the app can restore them on reload.
 
 ## Requirements
 

@@ -66,6 +66,12 @@ ipcMain.handle("storage:get-state", async () => {
   return storage.getStateForRenderer();
 });
 
+ipcMain.handle("storage:save-project", async (_event, payload) => {
+  return storage.saveProjectSnapshot(payload.folderId, {
+    agents: payload.agents
+  });
+});
+
 ipcMain.handle("models:list", async (_event, payload) => {
   if (Array.isArray(cachedModels)) {
     return cachedModels;

@@ -74,12 +74,41 @@ function getActiveFolder() {
 
 function getStateForRenderer() {
   const state = loadState();
+  const activeFolder = state.folders.find((folder) => folder.id === state.activeFolderId) || null;
   return {
     ...state,
-    activeFolder: state.folders.find((folder) => folder.id === state.activeFolderId) || null,
+    activeFolder,
+    activeProject: activeFolder ? state.projects[activeFolder.id] : null,
     configDir: CONFIG_DIR,
     statePath: STATE_PATH
   };
+}
+
+function saveProjectSnapshot(folderIdValue, snapshot) {
+  const state = loadState();
+  const folder = state.folders.find((item) => item.id === folderIdValue);
+  if (!folder) {
+    throw new Error("Cannot save project data for an unknown folder.");
+  }
+
+  const project = ensureProjectBucket(state, folderIdValue);
+  project.agents = sanitizeAgents(snapshot?.agents);
+  project.chatHistory = project.agents.flatMap((agent) =>
+    agent.transcript.map((message) => ({
+      agentId: agent.id,
+      agentTitle: agent.title,
+      role: message.role,
+      text: message.text,
+      timestamp: message.timestamp || agent.updatedAt || new Date().toISOString()
+    }))
+  );
+  project.metadata = {
+    ...(project.metadata || {}),
+    updatedAt: new Date().toISOString()
+  };
+
+  saveState(state);
+  return project;
 }
 
 function normalizeState(value) {
@@ -120,14 +149,59 @@ function ensureProjectBucket(state, folderIdValue) {
     agents: [],
     metadata: {}
   };
+  return state.projects[folderIdValue];
 }
 
 function folderId(folderPath) {
   return crypto.createHash("sha256").update(folderPath).digest("hex").slice(0, 16);
 }
 
+function sanitizeAgents(agents) {
+  if (!Array.isArray(agents)) {
+    return [];
+  }
+
+  return agents.map((agent) => {
+    const now = new Date().toISOString();
+    return {
+      id: stringOrFallback(agent.id, crypto.randomUUID()),
+      title: stringOrFallback(agent.title, "Pi Agent"),
+      role: typeof agent.role === "string" ? agent.role : null,
+      folderName: stringOrFallback(agent.folderName, ""),
+      folderPath: stringOrFallback(agent.folderPath, ""),
+      startedAt: stringOrFallback(agent.startedAt, ""),
+      status: stringOrFallback(agent.status, "saved"),
+      model: typeof agent.model === "string" ? agent.model : null,
+      modelInfo: agent.modelInfo && typeof agent.modelInfo === "object" ? agent.modelInfo : null,
+      restored: Boolean(agent.restored),
+      updatedAt: now,
+      transcript: sanitizeTranscript(agent.transcript)
+    };
+  });
+}
+
+function sanitizeTranscript(transcript) {
+  if (!Array.isArray(transcript)) {
+    return [];
+  }
+
+  return transcript
+    .filter((message) => message && typeof message.text === "string")
+    .map((message) => ({
+      role: stringOrFallback(message.role, "system"),
+      text: message.text,
+      ...(message.replaceKey ? { replaceKey: String(message.replaceKey) } : {}),
+      ...(message.timestamp ? { timestamp: String(message.timestamp) } : {})
+    }));
+}
+
+function stringOrFallback(value, fallback) {
+  return typeof value === "string" && value ? value : fallback;
+}
+
 module.exports = {
   getActiveFolder,
   getStateForRenderer,
+  saveProjectSnapshot,
   upsertFolder
 };
