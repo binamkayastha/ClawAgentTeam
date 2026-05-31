@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """Text-to-speech using the local Qwen3-TTS MLX model from LM Studio.
 
-Setup already done in this folder:
-  .venv with mlx-audio installed
-
 Examples:
   ./tts.py
-  ./tts.py "Hello world" --output hello.wav
-  ./tts.py "Hello world" --voice vivian --play
+  ./tts.py "Hello world" --voice vivian
+  ./tts.py "Hello world" --output hello.wav --no-play
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,62 +27,71 @@ def venv_python() -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate speech with local Qwen3-TTS.")
     parser.add_argument("text", nargs="?", default="Hello world", help="Text to speak")
-    parser.add_argument("--output", "-o", default="hello.wav", help="Output audio path")
+    parser.add_argument("--output", "-o", help="Optional output audio path")
     parser.add_argument("--voice", "-v", default=DEFAULT_VOICE, help=f"Voice. Supported: {SUPPORTED_VOICES}")
-    parser.add_argument("--play", action="store_true", help="Play the audio after writing it")
-    parser.add_argument("--max-tokens", default="512", help="Maximum generation tokens")
+    parser.add_argument("--no-play", action="store_true", help="Do not play audio after generation")
+    parser.add_argument("--max-tokens", type=int, default=512, help="Maximum generation tokens")
     args = parser.parse_args()
 
     py = venv_python()
-    if not py.exists():
-        print(f"Missing virtualenv: {py}", file=sys.stderr)
-        print("Create it with: python3 -m venv .venv && .venv/bin/pip install mlx-audio", file=sys.stderr)
-        return 1
+    venv_dir = Path(__file__).resolve().parent / ".venv"
+    if Path(sys.prefix).resolve() != venv_dir.resolve():
+        if not py.exists():
+            print(f"Missing virtualenv: {py}", file=sys.stderr)
+            print("Create it with: python3 -m venv .venv && .venv/bin/pip install mlx-audio", file=sys.stderr)
+            return 1
+        return subprocess.run([str(py), str(Path(__file__).resolve()), *sys.argv[1:]]).returncode
 
     if not MODEL_PATH.exists():
         print(f"Missing model: {MODEL_PATH}", file=sys.stderr)
         return 1
 
-    output = Path(args.output).expanduser().resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    prefix = output.stem
-    audio_format = output.suffix.lstrip(".") or "wav"
+    # Hide a harmless Transformers architecture warning printed while mlx-audio
+    # loads Qwen3-TTS through its own model registry.
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
-    generated = output.parent / f"{prefix}_000.{audio_format}"
-    if generated.exists():
-        generated.unlink()
+    import mlx.core as mx
+    import numpy as np
+    import sounddevice as sd
+    from mlx_audio.audio_io import write as audio_write
+    from mlx_audio.tts.utils import load_model
 
-    command = [
-        str(py),
-        "-m",
-        "mlx_audio.tts.generate",
-        "--model",
-        str(MODEL_PATH),
-        "--text",
-        args.text,
-        "--output_path",
-        str(output.parent),
-        "--file_prefix",
-        prefix,
-        "--audio_format",
-        audio_format,
-        "--voice",
-        args.voice,
-        "--max_tokens",
-        args.max_tokens,
-    ]
+    print(f"Loading Qwen3-TTS from {MODEL_PATH}")
+    model = load_model(MODEL_PATH)
 
-    subprocess.run(command, check=True)
+    print(f"Text: {args.text}")
+    print(f"Voice: {args.voice}")
 
-    if generated.exists() and generated != output:
-        if output.exists():
-            output.unlink()
-        generated.rename(output)
+    chunks = []
+    sample_rate = model.sample_rate
+    for result in model.generate(
+        text=args.text,
+        voice=args.voice,
+        lang_code="en",
+        max_tokens=args.max_tokens,
+        verbose=False,
+    ):
+        chunks.append(result.audio)
+        sample_rate = result.sample_rate
 
-    print(f"Wrote {output}")
+    if not chunks:
+        print("No audio generated", file=sys.stderr)
+        return 1
 
-    if args.play:
-        subprocess.run(["afplay", str(output)], check=True)
+    audio = mx.concatenate(chunks, axis=0) if len(chunks) > 1 else chunks[0]
+    audio_np = np.asarray(audio, dtype=np.float32)
+
+    if args.output:
+        output = Path(args.output).expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        audio_format = output.suffix.lstrip(".") or "wav"
+        audio_write(str(output), audio_np, sample_rate, format=audio_format)
+        print(f"Wrote {output}")
+
+    if not args.no_play:
+        print("Playing audio...")
+        sd.play(audio_np, sample_rate)
+        sd.wait()
 
     return 0
 
