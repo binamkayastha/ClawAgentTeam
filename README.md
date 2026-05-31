@@ -24,6 +24,7 @@ Pi RPC subprocesses
 - [Google Cloud CLI (`gcloud`)](https://cloud.google.com/sdk/docs/install) installed
 - Google Cloud project with Speech-to-Text API enabled
 - `pi` CLI installed and on PATH
+- (Optional) `OPENAI_API_KEY` environment variable — if set, GPT models are available automatically
 
 ## Google Cloud setup
 
