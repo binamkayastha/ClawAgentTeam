@@ -17,6 +17,9 @@ const roleSelect = document.querySelector("#agentRoleSelect");
 const modelSelect = document.querySelector("#agentModelSelect");
 const roleCreateButton = document.querySelector("#agentRoleCreate");
 const roleCancelButton = document.querySelector("#agentRoleCancel");
+const summaryPanel = document.querySelector("#summaryPanel");
+const summaryList = document.querySelector("#summaryList");
+const relayToggle = document.querySelector("#relayToggle");
 
 let availableModels = null;
 
@@ -85,6 +88,7 @@ function showScreen(name) {
   emptyState.classList.toggle("hidden", name !== "empty");
   setupState.classList.toggle("hidden", name !== "setup");
   agentsState.classList.toggle("hidden", name !== "agents");
+  summaryPanel.classList.toggle("hidden", name !== "agents");
 }
 
 function setFolder(folder) {
@@ -144,18 +148,26 @@ async function addAgent(role, model) {
     return;
   }
 
+  const index = state.agents.length + 1;
+  const agentName = `${role.label} #${index}`;
+  registerAgentName(agentName);
+
+  const systemPrompt = `${role.systemPrompt}\n\n${SUMMARY_INSTRUCTION(agentName)}`;
+
   const agent = await window.piFlow.createAgent({
-    index: state.agents.length + 1,
+    index,
     folderName: state.folder.name,
     folderPath: state.folder.path,
     roleId: role.id,
     roleLabel: role.label,
-    systemPrompt: role.systemPrompt,
+    agentName,
+    systemPrompt,
     ...(model ? { provider: model.provider, modelId: model.modelId } : {})
   });
 
   agent.role = role.label;
   agent.status = "idle";
+  agent.agentName = agentName;
   state.agents.push(agent);
   renderAgents();
   showScreen("agents");
@@ -373,6 +385,50 @@ function populateRoleOptions() {
   );
 }
 
+function formatSummaryTime(timestamp) {
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function appendSummaryEntry(payload) {
+  const entry = document.createElement("article");
+  entry.className = "summary-entry";
+  if (payload.ack) {
+    entry.classList.add("summary-entry-ack");
+  }
+
+  const header = document.createElement("div");
+  header.className = "summary-entry-header";
+
+  const sender = document.createElement("strong");
+  sender.className = "summary-entry-sender";
+  sender.textContent = payload.fromName;
+
+  const time = document.createElement("time");
+  time.className = "summary-entry-time";
+  time.dateTime = payload.timestamp;
+  time.textContent = formatSummaryTime(payload.timestamp);
+
+  header.append(sender, time);
+
+  const body = document.createElement("p");
+  body.className = "summary-entry-text";
+  const prefix = payload.ack ? "ACK — " : "";
+  body.textContent = `${prefix}${payload.text}`;
+
+  if (payload.depth) {
+    const depth = document.createElement("span");
+    depth.className = "summary-entry-depth";
+    depth.textContent = `depth ${payload.depth}/${MAX_RELAY_DEPTH}`;
+    entry.append(header, body, depth);
+  } else {
+    entry.append(header, body);
+  }
+
+  summaryList.append(entry);
+  summaryList.scrollTop = summaryList.scrollHeight;
+}
+
 populateRoleOptions();
 
 chooseFolderButton.addEventListener("click", chooseFolder);
@@ -380,6 +436,9 @@ createFirstAgentButton.addEventListener("click", openRolePicker);
 addAgentButton.addEventListener("click", openRolePicker);
 roleCreateButton.addEventListener("click", confirmRolePicker);
 roleCancelButton.addEventListener("click", closeRolePicker);
+relayToggle.addEventListener("change", async () => {
+  await window.piFlow.setRelay({ enabled: relayToggle.checked });
+});
 rolePicker.addEventListener("click", (event) => {
   if (event.target === rolePicker) {
     closeRolePicker();
@@ -451,6 +510,10 @@ window.piFlow.onAgentModels((payload) => {
     populateModelSelect(cardModelSelect, payload.models, { includeDefault: false });
     applyCardModelSelection(cardModelSelect, agent.modelInfo);
   }
+});
+
+window.piFlow.onAgentSummary((payload) => {
+  appendSummaryEntry(payload);
 });
 
 showScreen("empty");

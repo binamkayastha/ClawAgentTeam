@@ -6,6 +6,21 @@ const path = require("node:path");
 let mainWindow;
 const agentProcesses = new Map();
 let cachedModels = null;
+let relayEnabled = true;
+
+const MAX_RELAY_DEPTH = 10;
+
+function isAckSummary(text) {
+  return /^\s*ACK\s*[—-]\s*no action needed\s*$/i.test((text || "").trim());
+}
+
+function extractSummary(text) {
+  const matches = [...text.matchAll(/^\s*Summary:\s*(.+)\s*$/gim)];
+  if (!matches.length) {
+    return null;
+  }
+  return matches[matches.length - 1][1].trim();
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -100,12 +115,19 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     stdio: ["pipe", "pipe", "pipe"]
   });
 
+  const roleLabel = payload.roleLabel || "Pi Agent";
+
   const agentProcess = {
     id,
     child,
     buffer: "",
     isStreaming: false,
-    nextRequestId: 1
+    nextRequestId: 1,
+    name: payload.agentName || `${roleLabel} #${payload.index}`,
+    currentResponse: "",
+    incomingDepth: 0,
+    skipNextBroadcast: false,
+    systemPrompt: payload.systemPrompt || null
   };
 
   agentProcesses.set(id, agentProcess);
@@ -139,21 +161,12 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     });
   });
 
-  const roleLabel = payload.roleLabel || "Pi Agent";
-
   sendRpcCommand(agentProcess, {
     type: "set_session_name",
     name: `${roleLabel} - ${payload.folderName} - ${now.toLocaleString()}`
   });
   sendRpcCommand(agentProcess, { type: "get_state" });
   sendRpcCommand(agentProcess, { type: "get_available_models" });
-
-  if (payload.systemPrompt) {
-    sendRpcCommand(agentProcess, {
-      type: "prompt",
-      message: payload.systemPrompt
-    });
-  }
 
   const transcript = [
     {
@@ -187,13 +200,20 @@ ipcMain.handle("agent:message", async (_event, payload) => {
     return { ok: false, error: "PI session is not running." };
   }
 
+  agentProcess.incomingDepth = 0;
+
   sendRpcCommand(agentProcess, {
     type: "prompt",
-    message: payload.text,
+    message: buildAgentPrompt(agentProcess, payload.text),
     ...(agentProcess.isStreaming ? { streamingBehavior: "steer" } : {})
   });
 
   return { ok: true };
+});
+
+ipcMain.handle("agent:setRelay", async (_event, payload) => {
+  relayEnabled = Boolean(payload?.enabled);
+  return { ok: true, enabled: relayEnabled };
 });
 
 ipcMain.handle("agent:setModel", async (_event, payload) => {
@@ -292,6 +312,16 @@ function cleanStreamingOutput(chunk) {
   return chunk.toString("utf8").replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
 }
 
+function buildAgentPrompt(agentProcess, text) {
+  if (!agentProcess.systemPrompt) {
+    return text;
+  }
+
+  const message = `${agentProcess.systemPrompt}\n\n${text}`;
+  agentProcess.systemPrompt = null;
+  return message;
+}
+
 function sendRpcCommand(agentProcess, command) {
   const message = {
     id: `req-${agentProcess.id}-${agentProcess.nextRequestId++}`,
@@ -335,6 +365,7 @@ function handleRpcMessage(agentProcess, rawLine) {
     case "agent_end":
       agentProcess.isStreaming = false;
       emitAgentStatus(agentProcess.id, "idle");
+      finalizeTurn(agentProcess);
       break;
     case "message_update":
       handleMessageUpdate(agentProcess, message);
@@ -396,6 +427,8 @@ function handleMessageUpdate(agentProcess, message) {
   }
 
   if (event.type === "text_delta" && event.delta) {
+    const cleaned = cleanStreamingOutput(event.delta);
+    agentProcess.currentResponse += cleaned;
     emitAgentOutput(agentProcess.id, "agent", event.delta, { append: true });
   }
 
@@ -479,4 +512,72 @@ function emitAgentModels(id, models) {
     id,
     models
   });
+}
+
+function emitAgentSummary(payload) {
+  mainWindow?.webContents.send("agent:summary", payload);
+}
+
+function finalizeTurn(agentProcess) {
+  const summaryText = extractSummary(agentProcess.currentResponse);
+  agentProcess.currentResponse = "";
+
+  if (agentProcess.skipNextBroadcast) {
+    agentProcess.skipNextBroadcast = false;
+    return;
+  }
+
+  if (!summaryText) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const summaryPayload = {
+    fromId: agentProcess.id,
+    fromName: agentProcess.name,
+    text: summaryText,
+    depth: agentProcess.incomingDepth + 1,
+    timestamp
+  };
+
+  if (isAckSummary(summaryText)) {
+    emitAgentSummary({ ...summaryPayload, ack: true });
+    return;
+  }
+
+  const outgoingDepth = agentProcess.incomingDepth + 1;
+
+  emitAgentSummary({ ...summaryPayload, depth: outgoingDepth });
+
+  if (outgoingDepth > MAX_RELAY_DEPTH) {
+    return;
+  }
+
+  broadcastSummary(agentProcess, summaryText, outgoingDepth);
+}
+
+function broadcastSummary(sender, summaryText, depth) {
+  if (!relayEnabled) {
+    return;
+  }
+
+  const relayMessage = `[Relay depth ${depth}/${MAX_RELAY_DEPTH}]\nFrom ${sender.name}: Summary: ${summaryText}`;
+
+  for (const [targetId, target] of agentProcesses) {
+    if (targetId === sender.id) {
+      continue;
+    }
+
+    if (target.child.killed || !target.child.stdin.writable) {
+      continue;
+    }
+
+    target.incomingDepth = depth;
+
+    sendRpcCommand(target, {
+      type: "prompt",
+      message: buildAgentPrompt(target, relayMessage),
+      ...(target.isStreaming ? { streamingBehavior: "steer" } : {})
+    });
+  }
 }

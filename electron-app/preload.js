@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("piFlow", {
   sendMessage: (payload) => ipcRenderer.invoke("agent:message", payload),
   abortAgent: (payload) => ipcRenderer.invoke("agent:abort", payload),
   setModel: (payload) => ipcRenderer.invoke("agent:setModel", payload),
+  setRelay: (payload) => ipcRenderer.invoke("agent:setRelay", payload),
   onAgentOutput: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("agent:output", handler);
@@ -21,5 +22,10 @@ contextBridge.exposeInMainWorld("piFlow", {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("agent:models", handler);
     return () => ipcRenderer.removeListener("agent:models", handler);
+  },
+  onAgentSummary: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("agent:summary", handler);
+    return () => ipcRenderer.removeListener("agent:summary", handler);
   }
 });
