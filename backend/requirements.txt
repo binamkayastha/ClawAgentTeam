@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+google-cloud-speech
+python-dotenv
+python-multipart
