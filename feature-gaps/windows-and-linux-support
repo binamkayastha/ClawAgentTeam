@@ -1,0 +1,228 @@
+# Windows and Linux support for Qwen3-TTS
+
+## Summary
+
+Yes, there are Windows/Linux-oriented Qwen3-TTS options. The model we currently run is the MLX conversion:
+
+- `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit`
+
+That is Apple Silicon/macOS focused. For Linux/Windows, the most relevant path is the official Qwen PyTorch package/model family:
+
+- Python package: `qwen-tts` on PyPI
+- Official models:
+  - `Qwen/Qwen3-TTS-12Hz-0.6B-Base`
+  - `Qwen/Qwen3-TTS-12Hz-1.7B-Base`
+  - `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice`
+  - `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`
+  - `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`
+  - `Qwen/Qwen3-TTS-Tokenizer-12Hz`
+
+The official Hugging Face README for `Qwen/Qwen3-TTS-12Hz-0.6B-Base` says to install:
+
+```bash
+pip install -U qwen-tts
+# optional CUDA optimization
+pip install -U flash-attn --no-build-isolation
+```
+
+and use:
+
+```python
+import torch
+import soundfile as sf
+from qwen_tts import Qwen3TTSModel
+
+model = Qwen3TTSModel.from_pretrained(
+    "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+    device_map="cuda:0",
+    dtype=torch.bfloat16,
+    attn_implementation="flash_attention_2",
+)
+
+wavs, sr = model.generate_voice_clone(
+    text="Hello there",
+    language="English",
+    ref_audio="clone.wav",
+    ref_text="Exact transcript of clone.wav",
+)
+
+sf.write("output.wav", wavs[0], sr)
+```
+
+## What this means for packaging
+
+A cross-platform package should not hardcode MLX as the only backend.
+
+Recommended backend matrix:
+
+| Platform | Backend | Model source | Status |
+|---|---|---|---|
+| macOS Apple Silicon | `mlx-audio` | `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit` | Working locally |
+| Linux with NVIDIA CUDA | `qwen-tts` / PyTorch | `Qwen/Qwen3-TTS-*` | Likely best supported official path |
+| Windows with NVIDIA CUDA | `qwen-tts` / PyTorch | `Qwen/Qwen3-TTS-*` | Likely possible, needs validation |
+| CPU-only Linux/Windows | `qwen-tts` / PyTorch CPU, if supported | Smaller `0.6B` model | Unknown performance/practicality |
+
+## Important implementation differences
+
+### MLX path
+
+Our current script uses:
+
+```python
+from mlx_audio.tts.utils import load_model
+model = load_model("/path/to/mlx-community/Qwen3-TTS...")
+```
+
+and supports built-in voices from the CustomVoice MLX checkpoint:
+
+```text
+serena, vivian, uncle_fu, ryan, aiden, ono_anna, sohee, eric, dylan
+```
+
+### PyTorch/qwen-tts path
+
+The official package appears to expose:
+
+```python
+from qwen_tts import Qwen3TTSModel
+```
+
+and examples focus on Base voice cloning:
+
+```python
+model.generate_voice_clone(..., ref_audio=..., ref_text=...)
+```
+
+The package will probably need separate code paths for:
+
+- Base voice cloning models
+- CustomVoice models
+- VoiceDesign models
+
+Do not assume the MLX `voice="ryan"` API maps exactly to `qwen-tts` on Windows/Linux.
+
+## GGUF option
+
+There are GGUF conversions, but they are not drop-in Python package support:
+
+- `cstr/qwen3-tts-1.7b-base-GGUF`
+- `cstr/qwen3-tts-0.6b-base-GGUF`
+- `cstr/qwen3-tts-tokenizer-12hz-GGUF`
+- `mradermacher/Qwen3-1.7B-Multilingual-TTS-GGUF`
+
+The `cstr/qwen3-tts-1.7b-base-GGUF` README says it is for the `qwen3-tts` backend in `CrispStrobe/CrispASR`, and requires both:
+
+- talker/model GGUF
+- separate tokenizer/codec GGUF
+
+Example from README:
+
+```bash
+./build/bin/crispasr \
+    --backend qwen3-tts-1.7b-base \
+    -m qwen3-tts-12hz-1.7b-base-q8_0.gguf \
+    --codec-model qwen3-tts-tokenizer-12hz.gguf \
+    --voice clone.wav \
+    --ref-text "Exact transcript of clone.wav" \
+    --tts "Hello there" \
+    --tts-output hello.wav
+```
+
+This may be useful later for CPU-friendly Linux/Windows support, but it would require bundling or calling an external compiled binary. It is not as simple as `pip install`.
+
+## Proposed packaging design
+
+Expose one CLI, choose backend automatically:
+
+```bash
+qwen-tts "Hello world"
+qwen-tts "Hello world" --voice ryan
+qwen-tts "Hello world" --backend mlx
+qwen-tts "Hello world" --backend torch --model Qwen/Qwen3-TTS-12Hz-0.6B-Base --ref-audio clone.wav --ref-text "..."
+```
+
+Python package layout:
+
+```text
+qwen_tts_local/
+  __init__.py
+  cli.py
+  backends/
+    mlx_backend.py
+    torch_backend.py
+```
+
+Optional dependencies:
+
+```toml
+[project.optional-dependencies]
+mlx = ["mlx-audio", "sounddevice"]
+torch = ["qwen-tts", "torch", "soundfile", "sounddevice"]
+```
+
+Install examples:
+
+```bash
+# Apple Silicon Mac
+pip install "qwen-tts-local[mlx]"
+
+# Linux/Windows with PyTorch backend
+pip install "qwen-tts-local[torch]"
+```
+
+## Auto-download behavior
+
+Use Hugging Face caching rather than manually downloading into LM Studio paths.
+
+MLX:
+
+```python
+from huggingface_hub import snapshot_download
+
+model_path = snapshot_download(
+    "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+    allow_patterns=[
+        "config.json",
+        "generation_config.json",
+        "model.safetensors",
+        "model.safetensors.index.json",
+        "tokenizer_config.json",
+        "vocab.json",
+        "merges.txt",
+        "preprocessor_config.json",
+        "speech_tokenizer/*",
+    ],
+)
+```
+
+Torch:
+
+Prefer `Qwen3TTSModel.from_pretrained("Qwen/Qwen3-TTS-12Hz-0.6B-Base", ...)` and let the package/Hugging Face cache handle downloads.
+
+## Open questions / validation gaps
+
+1. Does `qwen-tts` install cleanly on Windows?
+2. Does `qwen-tts` require CUDA, or is CPU usable for small examples?
+3. Does `qwen-tts` support the CustomVoice named speakers the same way MLX does?
+4. What is the best default cross-platform model: `0.6B-Base`, `0.6B-CustomVoice`, or `1.7B-*`?
+5. Are `flash-attn` and `torch.bfloat16` optional enough for consumer Windows installs?
+6. Can direct playback with `sounddevice` work consistently across Windows/Linux audio devices?
+
+## Recommendation
+
+Ship in phases:
+
+1. Package current working Mac/MLX backend with auto-download from Hugging Face.
+2. Add `--backend torch` using official `qwen-tts` and the `0.6B-Base` model for Linux CUDA first.
+3. Validate Windows CUDA.
+4. Only then consider GGUF/CrispASR if CPU-friendly local inference is important.
+
+## Sources checked
+
+- Hugging Face model search for `Qwen3-TTS` and `qwen3_tts`
+- `Qwen/Qwen3-TTS-12Hz-0.6B-Base` README
+- `Qwen/Qwen3-TTS-12Hz-1.7B-Base` README
+- `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` README
+- `Qwen/Qwen3-TTS-Tokenizer-12Hz` README
+- `cstr/qwen3-tts-1.7b-base-GGUF` README
+- PyPI package index showing `qwen-tts` versions up to `0.1.1`

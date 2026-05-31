@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+  echo "This Qwen3-TTS MLX backend currently requires Apple Silicon macOS." >&2
+  echo "See feature-gaps/windows-and-linux-support for Linux/Windows options." >&2
+  exit 1
+fi
+
+if [[ ! -x .venv/bin/python ]]; then
+  python3 -m venv .venv
+fi
+
+.venv/bin/python -m pip install -q -U pip
+.venv/bin/python -m pip install -q -r requirements.txt
+exec .venv/bin/python tts.py "$@"

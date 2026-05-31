@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Text-to-speech using the local Qwen3-TTS MLX model from LM Studio.
+"""Text-to-speech using Qwen3-TTS with MLX.
 
 Examples:
-  ./tts.py
-  ./tts.py "Hello world" --voice vivian
-  ./tts.py "Hello world" --output hello.wav --no-play
+  ./run
+  ./run "Hello world" --voice vivian
+  ./run "Hello world" --output hello.wav --no-play
 """
 
 from __future__ import annotations
@@ -15,7 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-MODEL_PATH = Path.home() / ".lmstudio/models/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+MODEL_REPO = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+LM_STUDIO_MODEL_PATH = Path.home() / ".lmstudio/models/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
 DEFAULT_VOICE = "serena"
 SUPPORTED_VOICES = "serena, vivian, uncle_fu, ryan, aiden, ono_anna, sohee, eric, dylan"
 
@@ -24,11 +25,42 @@ def venv_python() -> Path:
     return Path(__file__).resolve().parent / ".venv/bin/python"
 
 
+def resolve_model_path(model: str | None) -> Path:
+    if model:
+        model_path = Path(model).expanduser()
+        if model_path.exists():
+            return model_path.resolve()
+        repo = model
+    elif LM_STUDIO_MODEL_PATH.exists() and (LM_STUDIO_MODEL_PATH / "speech_tokenizer").exists():
+        return LM_STUDIO_MODEL_PATH
+    else:
+        repo = MODEL_REPO
+
+    from huggingface_hub import snapshot_download
+
+    print(f"Downloading/loading model from Hugging Face: {repo}")
+    return Path(snapshot_download(
+        repo_id=repo,
+        allow_patterns=[
+            "config.json",
+            "generation_config.json",
+            "model.safetensors",
+            "model.safetensors.index.json",
+            "tokenizer_config.json",
+            "vocab.json",
+            "merges.txt",
+            "preprocessor_config.json",
+            "speech_tokenizer/*",
+        ],
+    ))
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate speech with local Qwen3-TTS.")
+    parser = argparse.ArgumentParser(description="Generate speech with Qwen3-TTS.")
     parser.add_argument("text", nargs="?", default="Hello world", help="Text to speak")
     parser.add_argument("--output", "-o", help="Optional output audio path")
     parser.add_argument("--voice", "-v", default=DEFAULT_VOICE, help=f"Voice. Supported: {SUPPORTED_VOICES}")
+    parser.add_argument("--model", help=f"Local model path or Hugging Face repo. Default: LM Studio model if present, else {MODEL_REPO}")
     parser.add_argument("--no-play", action="store_true", help="Do not play audio after generation")
     parser.add_argument("--max-tokens", type=int, default=512, help="Maximum generation tokens")
     args = parser.parse_args()
@@ -42,10 +74,6 @@ def main() -> int:
             return 1
         return subprocess.run([str(py), str(Path(__file__).resolve()), *sys.argv[1:]]).returncode
 
-    if not MODEL_PATH.exists():
-        print(f"Missing model: {MODEL_PATH}", file=sys.stderr)
-        return 1
-
     # Hide a harmless Transformers architecture warning printed while mlx-audio
     # loads Qwen3-TTS through its own model registry.
     os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
@@ -56,8 +84,9 @@ def main() -> int:
     from mlx_audio.audio_io import write as audio_write
     from mlx_audio.tts.utils import load_model
 
-    print(f"Loading Qwen3-TTS from {MODEL_PATH}")
-    model = load_model(MODEL_PATH)
+    model_path = resolve_model_path(args.model)
+    print(f"Loading Qwen3-TTS from {model_path}")
+    model = load_model(model_path)
 
     print(f"Text: {args.text}")
     print(f"Voice: {args.voice}")
