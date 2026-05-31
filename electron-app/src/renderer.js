@@ -59,7 +59,7 @@ function renderAgents() {
 
 function createAgentCard(agent) {
   const card = document.createElement("article");
-  card.className = "agent-card";
+  card.className = `agent-card agent-color-${agent.colorIndex ?? 0}`;
 
   const header = document.createElement("div");
   header.className = "agent-card-header";

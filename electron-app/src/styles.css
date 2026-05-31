@@ -230,6 +230,16 @@ h1 {
   text-overflow: ellipsis;
 }
 
+/* Agent color identities — cycles every 8 agents */
+.agent-color-0 { --agent-accent: #4f5d75; --agent-tint: rgba(79,93,117,0.07); }
+.agent-color-1 { --agent-accent: #7a4a3a; --agent-tint: rgba(122,74,58,0.07); }
+.agent-color-2 { --agent-accent: #4a5d4f; --agent-tint: rgba(74,93,79,0.07); }
+.agent-color-3 { --agent-accent: #5a4b7a; --agent-tint: rgba(90,75,122,0.07); }
+.agent-color-4 { --agent-accent: #7a6a3a; --agent-tint: rgba(122,106,58,0.07); }
+.agent-color-5 { --agent-accent: #3a6a7a; --agent-tint: rgba(58,106,122,0.07); }
+.agent-color-6 { --agent-accent: #7a3a5a; --agent-tint: rgba(122,58,90,0.07); }
+.agent-color-7 { --agent-accent: #3a5a3a; --agent-tint: rgba(58,90,58,0.07); }
+
 /* GRID stays structured (no asymmetry per your request) */
 .agent-grid {
   display: grid;
@@ -249,8 +259,9 @@ h1 {
 
   border: 1px solid var(--line);
   border-radius: 16px;
+  border-top: 2px solid var(--agent-accent, var(--accent));
 
-  background: var(--panel);
+  background: var(--agent-tint, var(--panel));
 
   overflow: hidden;
 
@@ -282,6 +293,8 @@ h1 {
   font-weight: 520;
 
   letter-spacing: -0.01em;
+
+  color: var(--agent-accent, var(--ink));
 }
 
 /* small label = publication metadata */

@@ -3,6 +3,8 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
+let agentCounter = 0;
+
 let mainWindow;
 const agentProcesses = new Map();
 
@@ -131,6 +133,7 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     title: `Pi Agent #${payload.index}`,
     folderName: payload.folderName,
     folderPath: payload.folderPath,
+    colorIndex: (agentCounter++) % 8,
     pid: child.pid,
     startedAt: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     transcript: [
