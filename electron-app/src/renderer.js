@@ -1,3 +1,90 @@
+const voiceState = new Map();
+
+async function getMediaRecorder() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  return new MediaRecorder(stream, { mimeType: "audio/webm" });
+}
+
+async function toggleRecording(agentId, micButton) {
+  let vs = voiceState.get(agentId);
+
+  if (vs && vs.recording) {
+    vs.recording = false;
+    micButton.classList.remove("recording");
+    micButton.textContent = "Mic";
+    if (vs.recorder && vs.recorder.state === "recording") {
+      vs.recorder.stop();
+    }
+    return;
+  }
+
+  if (!vs) {
+    try {
+      const recorder = await getMediaRecorder();
+      vs = { recorder, chunks: [], recording: false };
+      voiceState.set(agentId, vs);
+    } catch (err) {
+      console.warn("Microphone access denied:", err);
+      return;
+    }
+  }
+
+  vs.chunks = [];
+  vs.recording = true;
+  micButton.classList.add("recording");
+  micButton.textContent = "Stop";
+
+  vs.recorder.ondataavailable = (e) => {
+    if (e.data.size > 0) vs.chunks.push(e.data);
+  };
+
+  vs.recorder.onstop = async () => {
+    console.log("[voice] onstop fired, chunks:", vs.chunks.length);
+    const blob = new Blob(vs.chunks, { type: "audio/webm" });
+    vs.chunks = [];
+    console.log("[voice] blob size:", blob.size);
+    if (blob.size === 0) return;
+
+    const agent = state.agents.find((a) => a.id === agentId);
+    if (!agent) return;
+
+    agent.transcript.push({ role: "system", text: "Transcribing..." });
+    const log = document.querySelector(`.chat-log[data-agent-id="${agentId}"]`);
+    if (log) renderTranscript(log, agent.transcript);
+
+    try {
+      const arrayBuffer = await blob.arrayBuffer();
+      const uint8 = new Uint8Array(arrayBuffer);
+      console.log("[voice] sending audio to main process, bytes:", uint8.length);
+      const data = await window.piFlow.transcribeAudio(uint8);
+      console.log("[voice] transcription response:", data);
+
+      agent.transcript.pop();
+
+      if (data.transcript) {
+        agent.transcript.push({ role: "user", text: data.transcript });
+        if (log) renderTranscript(log, agent.transcript);
+        const result = await window.piFlow.sendMessage({ id: agentId, text: data.transcript });
+        if (!result.ok) {
+          agent.transcript.push({ role: "system", text: result.error });
+          if (log) renderTranscript(log, agent.transcript);
+        }
+      } else {
+        agent.transcript.pop();
+        agent.transcript.push({ role: "system", text: "Could not transcribe audio. Try again." });
+        if (log) renderTranscript(log, agent.transcript);
+      }
+    } catch (err) {
+      console.error("[voice] transcription error:", err);
+      agent.transcript.pop();
+      agent.transcript.push({ role: "system", text: `Transcription failed: ${err.message}` });
+      if (log) renderTranscript(log, agent.transcript);
+    }
+  };
+
+  vs.recorder.start();
+}
+
 const state = {
   folder: null,
   agents: []
@@ -100,6 +187,8 @@ function createAgentCard(agent) {
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.textContent = "Send";
+
+  mic.addEventListener("click", () => toggleRecording(agent.id, mic));
 
   form.append(input, mic, submit);
   form.addEventListener("submit", handleChatSubmit);

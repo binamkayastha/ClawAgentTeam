@@ -63,6 +63,23 @@ ipcMain.handle("folder:choose", async () => {
   };
 });
 
+ipcMain.handle("audio:transcribe", async (_event, buffer) => {
+  const { Blob } = require("node:buffer");
+  console.log("[main] audio:transcribe called, bytes:", buffer?.byteLength ?? buffer?.length);
+  try {
+    const audioBlob = new Blob([Buffer.from(buffer)], { type: "audio/webm" });
+    const form = new FormData();
+    form.append("file", audioBlob, "recording.webm");
+    const res = await fetch("http://127.0.0.1:8000/transcribe", { method: "POST", body: form });
+    const data = await res.json();
+    console.log("[main] transcription result:", data);
+    return data;
+  } catch (err) {
+    console.error("[main] transcription error:", err.message);
+    throw err;
+  }
+});
+
 ipcMain.handle("agent:create", async (_event, payload) => {
   if (!payload?.folderPath || !fs.existsSync(payload.folderPath)) {
     throw new Error("Choose an existing folder before creating a PI agent.");
