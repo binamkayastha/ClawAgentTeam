@@ -11,7 +11,7 @@ npm install
 npm start
 ```
 
-The app opens with the folder selection flow, then starts one `pi` subprocess per agent card from the selected folder and streams that session output into the card chat.
+The app opens with the folder selection flow, then starts one `pi --mode rpc` subprocess per agent card from the selected folder and streams that session output into the card chat.
 
 ## Requirements
 

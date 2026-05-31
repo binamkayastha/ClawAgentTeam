@@ -68,6 +68,8 @@ function createAgentCard(agent) {
   title.textContent = agent.title;
 
   const meta = document.createElement("span");
+  meta.className = "agent-status";
+  meta.dataset.agentId = agent.id;
   meta.textContent = agent.startedAt;
 
   header.append(title, meta);
@@ -88,11 +90,18 @@ function createAgentCard(agent) {
   input.autocomplete = "off";
   input.ariaLabel = `Message ${agent.title}`;
 
+  const mic = document.createElement("button");
+  mic.type = "button";
+  mic.className = "mic-button";
+  mic.textContent = "Mic";
+  mic.ariaLabel = `Voice input for ${agent.title}`;
+  mic.title = "Voice input";
+
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.textContent = "Send";
 
-  form.append(input, submit);
+  form.append(input, mic, submit);
   form.addEventListener("submit", handleChatSubmit);
   card.append(header, messages, form);
   return card;
@@ -108,6 +117,46 @@ function renderTranscript(container, transcript) {
     })
   );
   container.scrollTop = container.scrollHeight;
+}
+
+function appendTranscript(agent, payload) {
+  if (payload.replaceKey) {
+    const existing = agent.transcript.find((message) => message.replaceKey === payload.replaceKey);
+    if (existing) {
+      existing.text = payload.text;
+      existing.role = payload.role;
+      return;
+    }
+
+    agent.transcript.push({
+      role: payload.role,
+      text: payload.text,
+      replaceKey: payload.replaceKey
+    });
+    return;
+  }
+
+  if (payload.append) {
+    const last = agent.transcript[agent.transcript.length - 1];
+    if (last?.role === payload.role && last.streaming) {
+      last.text += payload.text;
+      return;
+    }
+
+    agent.transcript.push({
+      role: payload.role,
+      text: payload.text,
+      streaming: true
+    });
+    return;
+  }
+
+  const last = agent.transcript[agent.transcript.length - 1];
+  if (last?.streaming) {
+    delete last.streaming;
+  }
+
+  agent.transcript.push({ role: payload.role, text: payload.text });
 }
 
 async function handleChatSubmit(event) {
@@ -151,10 +200,29 @@ window.piFlow.onAgentOutput((payload) => {
     return;
   }
 
-  agent.transcript.push({ role: payload.role, text: payload.text });
+  appendTranscript(agent, payload);
   const log = document.querySelector(`.chat-log[data-agent-id="${payload.id}"]`);
   if (log) {
     renderTranscript(log, agent.transcript);
+  }
+});
+
+window.piFlow.onAgentStatus((payload) => {
+  const agent = state.agents.find((item) => item.id === payload.id);
+  if (!agent) {
+    return;
+  }
+
+  agent.status = payload.status;
+  if (payload.model) {
+    agent.model = payload.model;
+  }
+
+  const status = document.querySelector(`.agent-status[data-agent-id="${payload.id}"]`);
+  if (status) {
+    const suffix = payload.pendingCount ? ` (${payload.pendingCount} queued)` : "";
+    status.textContent = `${payload.status}${suffix}`;
+    status.title = agent.model || "";
   }
 });
 

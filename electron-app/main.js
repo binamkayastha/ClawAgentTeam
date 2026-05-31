@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 
 let mainWindow;
@@ -40,8 +41,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  for (const child of agentProcesses.values()) {
-    child.kill();
+  for (const agentProcess of agentProcesses.values()) {
+    agentProcess.child.kill();
   }
 });
 
@@ -63,9 +64,13 @@ ipcMain.handle("folder:choose", async () => {
 });
 
 ipcMain.handle("agent:create", async (_event, payload) => {
+  if (!payload?.folderPath || !fs.existsSync(payload.folderPath)) {
+    throw new Error("Choose an existing folder before creating a PI agent.");
+  }
+
   const now = new Date();
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const child = spawn("pi", [], {
+  const child = spawn("pi", ["--mode", "rpc"], {
     cwd: payload.folderPath,
     env: {
       ...process.env,
@@ -76,14 +81,18 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     stdio: ["pipe", "pipe", "pipe"]
   });
 
-  agentProcesses.set(id, child);
+  const agentProcess = {
+    id,
+    child,
+    buffer: "",
+    isStreaming: false,
+    nextRequestId: 1
+  };
+
+  agentProcesses.set(id, agentProcess);
 
   child.stdout.on("data", (chunk) => {
-    mainWindow?.webContents.send("agent:output", {
-      id,
-      role: "agent",
-      text: cleanOutput(chunk)
-    });
+    readRpcOutput(agentProcess, chunk);
   });
 
   child.stderr.on("data", (chunk) => {
@@ -111,6 +120,12 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     });
   });
 
+  sendRpcCommand(agentProcess, {
+    type: "set_session_name",
+    name: `${payload.folderName} - ${now.toLocaleString()}`
+  });
+  sendRpcCommand(agentProcess, { type: "get_state" });
+
   return {
     id,
     title: `Pi Agent #${payload.index}`,
@@ -121,19 +136,24 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     transcript: [
       {
         role: "system",
-        text: `PI session starting for ${payload.folderName}.`
+        text: `PI RPC session starting for ${payload.folderName}.`
       }
     ]
   };
 });
 
 ipcMain.handle("agent:message", async (_event, payload) => {
-  const child = agentProcesses.get(payload.id);
-  if (!child || child.killed || !child.stdin.writable) {
+  const agentProcess = agentProcesses.get(payload.id);
+  if (!agentProcess || agentProcess.child.killed || !agentProcess.child.stdin.writable) {
     return { ok: false, error: "PI session is not running." };
   }
 
-  child.stdin.write(`${payload.text}\n`);
+  sendRpcCommand(agentProcess, {
+    type: "prompt",
+    message: payload.text,
+    ...(agentProcess.isStreaming ? { streamingBehavior: "steer" } : {})
+  });
+
   return { ok: true };
 });
 
@@ -142,4 +162,180 @@ function cleanOutput(chunk) {
     .toString("utf8")
     .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
     .trim();
+}
+
+function cleanStreamingOutput(chunk) {
+  return chunk.toString("utf8").replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+}
+
+function sendRpcCommand(agentProcess, command) {
+  const message = {
+    id: `req-${agentProcess.id}-${agentProcess.nextRequestId++}`,
+    ...command
+  };
+
+  agentProcess.child.stdin.write(`${JSON.stringify(message)}\n`);
+}
+
+function readRpcOutput(agentProcess, chunk) {
+  agentProcess.buffer += chunk.toString("utf8");
+
+  let lineEnd = agentProcess.buffer.indexOf("\n");
+  while (lineEnd !== -1) {
+    const rawLine = agentProcess.buffer.slice(0, lineEnd).replace(/\r$/, "");
+    agentProcess.buffer = agentProcess.buffer.slice(lineEnd + 1);
+    if (rawLine.trim()) {
+      handleRpcMessage(agentProcess, rawLine);
+    }
+    lineEnd = agentProcess.buffer.indexOf("\n");
+  }
+}
+
+function handleRpcMessage(agentProcess, rawLine) {
+  let message;
+  try {
+    message = JSON.parse(rawLine);
+  } catch {
+    emitAgentOutput(agentProcess.id, "system", rawLine);
+    return;
+  }
+
+  switch (message.type) {
+    case "response":
+      handleRpcResponse(agentProcess, message);
+      break;
+    case "agent_start":
+      agentProcess.isStreaming = true;
+      emitAgentStatus(agentProcess.id, "running");
+      break;
+    case "agent_end":
+      agentProcess.isStreaming = false;
+      emitAgentStatus(agentProcess.id, "idle");
+      break;
+    case "message_update":
+      handleMessageUpdate(agentProcess, message);
+      break;
+    case "tool_execution_start":
+      emitAgentOutput(agentProcess.id, "system", `Running ${message.toolName}.`);
+      break;
+    case "tool_execution_update":
+      handleToolExecutionUpdate(agentProcess, message);
+      break;
+    case "tool_execution_end":
+      handleToolExecutionEnd(agentProcess, message);
+      break;
+    case "queue_update":
+      emitAgentStatus(agentProcess.id, "queued", {
+        pendingCount: (message.steering?.length ?? 0) + (message.followUp?.length ?? 0)
+      });
+      break;
+    case "extension_ui_request":
+      handleExtensionUiRequest(agentProcess, message);
+      break;
+    case "extension_error":
+      emitAgentOutput(agentProcess.id, "system", `Extension error: ${message.error}`);
+      break;
+    default:
+      break;
+  }
+}
+
+function handleRpcResponse(agentProcess, response) {
+  if (!response.success) {
+    emitAgentOutput(agentProcess.id, "system", response.error || `${response.command} failed.`);
+    return;
+  }
+
+  if (response.command === "get_state" && response.data) {
+    agentProcess.isStreaming = Boolean(response.data.isStreaming);
+    emitAgentStatus(agentProcess.id, agentProcess.isStreaming ? "running" : "idle", {
+      model: response.data.model?.name || response.data.model?.id || null,
+      sessionName: response.data.sessionName || null
+    });
+  }
+}
+
+function handleMessageUpdate(agentProcess, message) {
+  const event = message.assistantMessageEvent;
+  if (!event) {
+    return;
+  }
+
+  if (event.type === "text_delta" && event.delta) {
+    emitAgentOutput(agentProcess.id, "agent", event.delta, { append: true });
+  }
+
+  if (event.type === "error") {
+    emitAgentOutput(agentProcess.id, "system", event.error || "PI reported an error.");
+  }
+}
+
+function handleToolExecutionUpdate(agentProcess, message) {
+  const text = textFromToolResult(message.partialResult);
+  if (text) {
+    emitAgentOutput(agentProcess.id, "tool", text, {
+      replaceKey: message.toolCallId
+    });
+  }
+}
+
+function handleToolExecutionEnd(agentProcess, message) {
+  const text = textFromToolResult(message.result);
+  emitAgentOutput(agentProcess.id, message.isError ? "system" : "tool", text || `${message.toolName} finished.`, {
+    replaceKey: message.toolCallId
+  });
+}
+
+function handleExtensionUiRequest(agentProcess, request) {
+  const title = request.title || request.message || request.method;
+  emitAgentOutput(agentProcess.id, "system", `PI requested UI input: ${title}`);
+
+  if (["select", "input", "editor", "confirm"].includes(request.method)) {
+    agentProcess.child.stdin.write(
+      `${JSON.stringify({
+        type: "extension_ui_response",
+        id: request.id,
+        cancelled: true
+      })}\n`
+    );
+  }
+}
+
+function textFromToolResult(result) {
+  const content = result?.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .filter((item) => item?.type === "text" && item.text)
+    .map((item) => item.text)
+    .join("\n")
+    .trim();
+}
+
+function emitAgentOutput(id, role, text, options = {}) {
+  const cleaned = typeof text === "string"
+    ? options.append
+      ? cleanStreamingOutput(text)
+      : cleanOutput(text)
+    : "";
+  if (!cleaned) {
+    return;
+  }
+
+  mainWindow?.webContents.send("agent:output", {
+    id,
+    role,
+    text: cleaned,
+    ...options
+  });
+}
+
+function emitAgentStatus(id, status, details = {}) {
+  mainWindow?.webContents.send("agent:status", {
+    id,
+    status,
+    ...details
+  });
 }
