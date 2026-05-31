@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 let agentCounter = 0;
@@ -9,6 +10,12 @@ let mainWindow;
 const agentProcesses = new Map();
 let cachedModels = null;
 let relayEnabled = true;
+const repoRoot = path.resolve(__dirname, "..");
+const speechState = {
+  owner: null,
+  active: null,
+  queue: []
+};
 
 const MAX_RELAY_DEPTH = 10;
 
@@ -101,6 +108,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopActiveSpeech();
   for (const agentProcess of agentProcesses.values()) {
     agentProcess.child.kill();
   }
@@ -190,7 +198,8 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     lastSummaryText: null,
     incomingDepth: 0,
     skipNextBroadcast: false,
-    systemPrompt: payload.systemPrompt || null
+    systemPrompt: payload.systemPrompt || null,
+    spokenSummaries: new Set()
   };
 
   agentProcesses.set(id, agentProcess);
@@ -275,6 +284,7 @@ ipcMain.handle("agent:message", async (_event, payload) => {
   agentProcess.incomingDepth = 0;
   agentProcess.currentResponse = "";
   agentProcess.lastSummaryText = null;
+  releaseSpeechControl();
 
   sendRpcCommand(agentProcess, {
     type: "prompt",
@@ -282,6 +292,16 @@ ipcMain.handle("agent:message", async (_event, payload) => {
     ...(agentProcess.isStreaming ? { streamingBehavior: "steer" } : {})
   });
 
+  return { ok: true };
+});
+
+ipcMain.handle("mic:claim", async (_event, payload) => {
+  claimUserMicrophone(payload?.id || null);
+  return { ok: true };
+});
+
+ipcMain.handle("mic:release", async () => {
+  releaseSpeechControl();
   return { ok: true };
 });
 
@@ -643,6 +663,7 @@ function finalizeTurn(agentProcess, endMessage = null) {
   const outgoingDepth = agentProcess.incomingDepth + 1;
 
   emitAgentSummary({ ...summaryPayload, depth: outgoingDepth });
+  speakSummary(summaryText, agentProcess.id);
 
   if (outgoingDepth > MAX_RELAY_DEPTH) {
     return;
@@ -686,4 +707,170 @@ function broadcastSummary(sender, summaryText, depth) {
       depth
     });
   }
+}
+
+function speakSummary(summary, agentId) {
+  const agentProcess = agentProcesses.get(agentId);
+  const dedupeKey = `${agentId}:${summary}`;
+  if (agentProcess?.spokenSummaries?.has(dedupeKey)) {
+    return;
+  }
+
+  agentProcess?.spokenSummaries?.add(dedupeKey);
+  enqueueAgentSpeech(agentId, summary);
+}
+
+function enqueueAgentSpeech(agentId, text) {
+  if (speechState.owner?.type === "user") {
+    return;
+  }
+
+  const existingActiveForAgent = speechState.active?.agentId === agentId;
+  speechState.queue = speechState.queue.filter((job) => job.agentId !== agentId);
+  speechState.queue.push(createSpeechJob(agentId, text));
+
+  if (existingActiveForAgent) {
+    stopActiveSpeech();
+    return;
+  }
+
+  pumpSpeechQueue();
+}
+
+function createSpeechJob(agentId, text) {
+  return {
+    agentId,
+    text,
+    child: null,
+    cancelled: false
+  };
+}
+
+function claimUserMicrophone(agentId) {
+  speechState.owner = { type: "user", agentId };
+  speechState.queue = [];
+  stopActiveSpeech();
+  emitMicState();
+}
+
+function releaseSpeechControl() {
+  speechState.owner = null;
+  speechState.queue = [];
+  stopActiveSpeech();
+  emitMicState();
+}
+
+function stopActiveSpeech() {
+  const active = speechState.active;
+  if (!active) {
+    return;
+  }
+
+  active.cancelled = true;
+  if (active.child && !active.child.killed) {
+    active.child.kill();
+  }
+}
+
+function pumpSpeechQueue() {
+  if (speechState.active || speechState.owner?.type === "user") {
+    return;
+  }
+
+  const next = speechState.queue.shift();
+  if (!next) {
+    speechState.owner = null;
+    emitMicState();
+    return;
+  }
+
+  speechState.owner = { type: "agent", agentId: next.agentId };
+  speechState.active = next;
+  emitMicState();
+
+  runQwenTts(next)
+    .catch((error) => {
+      if (!next.cancelled) {
+        emitAgentOutput(next.agentId, "system", `Qwen text-to-speech failed: ${error.message}`);
+      }
+    })
+    .finally(() => {
+      if (speechState.active === next) {
+        speechState.active = null;
+      }
+
+      if (speechState.owner?.type === "agent" && speechState.owner.agentId === next.agentId) {
+        speechState.owner = null;
+      }
+
+      emitMicState();
+      pumpSpeechQueue();
+    });
+}
+
+async function runQwenTts(job) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-tts-"));
+  const outputPath = path.join(tempDir, "speech.wav");
+
+  try {
+    await runSpeechCommand(
+      path.join(repoRoot, "run"),
+      [job.text, "--output", outputPath, "--no-play"],
+      { cwd: repoRoot },
+      job
+    );
+    if (!job.cancelled) {
+      await runSpeechCommand("afplay", [outputPath], { cwd: repoRoot }, job);
+    }
+  } finally {
+    fs.rm(tempDir, { recursive: true, force: true }, () => {});
+  }
+}
+
+function runSpeechCommand(command, args, options, job = null) {
+  return new Promise((resolve, reject) => {
+    if (job?.cancelled) {
+      resolve();
+      return;
+    }
+
+    const child = spawn(command, args, {
+      ...options,
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+
+    if (job) {
+      job.child = child;
+    }
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (job?.child === child) {
+        job.child = null;
+      }
+
+      if (job?.cancelled) {
+        resolve();
+        return;
+      }
+
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(stderr.trim() || `speech command exited ${signal || `with code ${code}`}`));
+    });
+  });
+}
+
+function emitMicState() {
+  mainWindow?.webContents.send("mic:state", {
+    owner: speechState.owner
+  });
 }

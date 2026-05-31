@@ -31,6 +31,7 @@ async function toggleRecording(agentId, micButton) {
 
   vs.chunks = [];
   vs.recording = true;
+  await window.piFlow.claimMic({ id: agentId });
   micButton.classList.add("recording");
   micButton.textContent = "Stop";
 
@@ -87,7 +88,8 @@ async function toggleRecording(agentId, micButton) {
 
 const state = {
   folder: null,
-  agents: []
+  agents: [],
+  micOwner: null
 };
 
 const emptyState = document.querySelector("#emptyState");
@@ -99,6 +101,8 @@ const addAgentButton = document.querySelector("#addAgentButton");
 const setupFolderName = document.querySelector("#setupFolderName");
 const workspaceFolderName = document.querySelector("#workspaceFolderName");
 const agentGrid = document.querySelector("#agentGrid");
+const micHolder = document.querySelector("#micHolder");
+const micHolderValue = document.querySelector("#micHolderValue");
 const rolePicker = document.querySelector("#agentRolePicker");
 const roleSelect = document.querySelector("#agentRoleSelect");
 const modelSelect = document.querySelector("#agentModelSelect");
@@ -291,6 +295,7 @@ async function abortAgent(agent) {
 
 function renderAgents() {
   agentGrid.replaceChildren(...state.agents.map(createAgentCard));
+  updateMicButtons();
 }
 
 function createAgentCard(agent) {
@@ -348,6 +353,7 @@ function createAgentCard(agent) {
   const mic = document.createElement("button");
   mic.type = "button";
   mic.className = "mic-button";
+  mic.dataset.agentId = agent.id;
   mic.textContent = "Mic";
   mic.ariaLabel = `Voice input for ${agent.title}`;
   mic.title = "Voice input";
@@ -389,11 +395,26 @@ function renderTranscript(container, transcript) {
     ...transcript.map((message) => {
       const bubble = document.createElement("p");
       bubble.className = `chat-message ${message.role}`;
-      bubble.textContent = message.text;
+      bubble.textContent = formatChatMessage(message.text);
       return bubble;
     })
   );
   container.scrollTop = container.scrollHeight;
+}
+
+function formatChatMessage(text) {
+  if (typeof text !== "string") {
+    return "";
+  }
+
+  return text
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s+-\s+/g, "\n- ")
+    .replace(/\s+(\d+)\.\s+/g, "\n$1. ")
+    .replace(/\s+(For any screen or feature,)/g, "\n\n$1")
+    .replace(/\s+(Send me\b)/g, "\n\n$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function appendTranscript(agent, payload) {
@@ -461,6 +482,39 @@ async function handleChatSubmit(event) {
     agent.transcript.push({ role: "system", text: result.error });
     renderTranscript(log, agent.transcript);
   }
+}
+
+function updateMicButtons() {
+  document.querySelectorAll(".mic-button").forEach((button) => {
+    const ownsMic = state.micOwner?.type === "user" && state.micOwner.agentId === button.dataset.agentId;
+    const agentSpeaking = state.micOwner?.type === "agent" && state.micOwner.agentId === button.dataset.agentId;
+
+    button.classList.toggle("active", ownsMic);
+    button.classList.toggle("speaking", agentSpeaking);
+    button.textContent = button.classList.contains("recording") ? "Stop" : ownsMic ? "Mic On" : "Mic";
+    button.ariaPressed = ownsMic ? "true" : "false";
+  });
+
+  updateMicHolder();
+}
+
+function updateMicHolder() {
+  if (!micHolder || !micHolderValue) {
+    return;
+  }
+
+  micHolder.classList.toggle("active", Boolean(state.micOwner));
+
+  if (!state.micOwner) {
+    micHolderValue.textContent = "Available";
+    return;
+  }
+
+  const agent = state.agents.find((item) => item.id === state.micOwner.agentId);
+  const name = agent?.title || "Unknown agent";
+  micHolderValue.textContent = state.micOwner.type === "user"
+    ? `User on ${name}`
+    : `${name}`;
 }
 
 function populateRoleOptions() {
@@ -599,6 +653,11 @@ window.piFlow.onAgentModels((payload) => {
     populateModelSelect(cardModelSelect, payload.models, { includeDefault: false });
     applyCardModelSelection(cardModelSelect, agent.modelInfo);
   }
+});
+
+window.piFlow.onMicState((payload) => {
+  state.micOwner = payload.owner || null;
+  updateMicButtons();
 });
 
 window.piFlow.onAgentSummary((payload) => {

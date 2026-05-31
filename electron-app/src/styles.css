@@ -83,6 +83,46 @@ input {
   padding: 40px;
 }
 
+.session-strip {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 14px;
+}
+
+.mic-holder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 220px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.75);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mic-holder.active {
+  border-color: rgba(79,93,117,0.25);
+  background: rgba(79,93,117,0.08);
+  color: var(--accent);
+}
+
+.mic-holder-label {
+  color: inherit;
+  text-transform: uppercase;
+}
+
+.mic-holder-value {
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+}
+
 .summary-panel {
   display: flex;
   flex-direction: column;
@@ -520,6 +560,7 @@ h1 {
   line-height: 1.55;
   font-size: 13px;
 
+  white-space: pre-wrap;
   word-break: break-word;
 }
 
@@ -648,6 +689,16 @@ h1 {
   cursor: not-allowed;
 }
 
+.chat-entry .mic-button.active {
+  border-color: var(--accent);
+  background: rgba(79,93,117,0.08);
+  color: var(--accent);
+}
+
+.chat-entry .mic-button.speaking {
+  background: rgba(79,93,117,0.08);
+}
+
 .chat-entry .mic-button.recording {
   background: var(--accent);
   border-color: var(--accent);
@@ -736,6 +787,10 @@ h1 {
     padding: 18px;
   }
 
+  .mic-holder {
+    width: 100%;
+  }
+
   .summary-panel {
     width: 100%;
     min-width: 0;
@@ -769,5 +824,3 @@ h1 {
     padding: 10px 18px 24px;
   }
 }
-
-
