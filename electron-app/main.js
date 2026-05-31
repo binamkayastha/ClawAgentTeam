@@ -3,9 +3,25 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
+// Load .env from project root into process.env
+(function loadEnv() {
+  const envPath = path.join(__dirname, "..", ".env");
+  if (!fs.existsSync(envPath)) return;
+  for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const value = trimmed.slice(eq + 1).trim();
+    if (key && !(key in process.env)) process.env[key] = value;
+  }
+})();
+
 let mainWindow;
 const agentProcesses = new Map();
 let cachedModels = null;
+let weaveProcess = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -44,6 +60,10 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   for (const agentProcess of agentProcesses.values()) {
     agentProcess.child.kill();
+  }
+  if (weaveProcess) {
+    weaveProcess.stdin.end();
+    weaveProcess.kill();
   }
 });
 
@@ -109,6 +129,14 @@ ipcMain.handle("agent:create", async (_event, payload) => {
   };
 
   agentProcesses.set(id, agentProcess);
+
+  startWeaveLogger();
+  sendToWeave({
+    type: "agent_create",
+    agentId: id,
+    role: payload.roleLabel || "Pi Agent",
+    model: payload.modelId || "default"
+  });
 
   child.stdout.on("data", (chunk) => {
     readRpcOutput(agentProcess, chunk);
@@ -192,6 +220,8 @@ ipcMain.handle("agent:message", async (_event, payload) => {
     message: payload.text,
     ...(agentProcess.isStreaming ? { streamingBehavior: "steer" } : {})
   });
+
+  sendToWeave({ type: "user_message", agentId: payload.id, text: payload.text });
 
   return { ok: true };
 });
@@ -321,10 +351,12 @@ function handleRpcMessage(agentProcess, rawLine) {
     case "agent_start":
       agentProcess.isStreaming = true;
       emitAgentStatus(agentProcess.id, "running");
+      sendToWeave({ type: "agent_start", agentId: agentProcess.id });
       break;
     case "agent_end":
       agentProcess.isStreaming = false;
       emitAgentStatus(agentProcess.id, "idle");
+      sendToWeave({ type: "agent_end", agentId: agentProcess.id });
       break;
     case "message_update":
       handleMessageUpdate(agentProcess, message);
@@ -387,6 +419,7 @@ function handleMessageUpdate(agentProcess, message) {
 
   if (event.type === "text_delta" && event.delta) {
     emitAgentOutput(agentProcess.id, "agent", event.delta, { append: true });
+    sendToWeave({ type: "message_update", agentId: agentProcess.id, delta: event.delta });
   }
 
   if (event.type === "error") {
@@ -407,6 +440,12 @@ function handleToolExecutionEnd(agentProcess, message) {
   const text = textFromToolResult(message.result);
   emitAgentOutput(agentProcess.id, message.isError ? "system" : "tool", text || `${message.toolName} finished.`, {
     replaceKey: message.toolCallId
+  });
+  sendToWeave({
+    type: "tool_execution_end",
+    agentId: agentProcess.id,
+    toolName: message.toolName,
+    result: text
   });
 }
 
@@ -469,4 +508,43 @@ function emitAgentModels(id, models) {
     id,
     models
   });
+}
+
+function startWeaveLogger() {
+  if (weaveProcess) return;
+
+  const scriptPath = path.join(__dirname, "..", "weave_logger.py");
+  if (!fs.existsSync(scriptPath)) {
+    console.warn("[weave] weave_logger.py not found, skipping.");
+    return;
+  }
+
+  const pythonCmd = process.platform === "win32" ? "python" : "python3";
+
+  weaveProcess = spawn(pythonCmd, [scriptPath], {
+    env: { ...process.env },
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+
+  weaveProcess.stderr.on("data", (chunk) => {
+    console.log("[weave]", chunk.toString("utf8").trim());
+  });
+
+  weaveProcess.on("error", (err) => {
+    console.error("[weave] Failed to start:", err.message);
+    weaveProcess = null;
+  });
+
+  weaveProcess.on("exit", () => {
+    weaveProcess = null;
+  });
+}
+
+function sendToWeave(event) {
+  if (!weaveProcess || weaveProcess.killed || !weaveProcess.stdin.writable) return;
+  try {
+    weaveProcess.stdin.write(JSON.stringify(event) + "\n");
+  } catch {
+    // ignore — weave logging is best-effort
+  }
 }
