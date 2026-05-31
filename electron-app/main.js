@@ -6,6 +6,7 @@ const path = require("node:path");
 let mainWindow;
 const agentProcesses = new Map();
 let cachedModels = null;
+const repoRoot = path.resolve(__dirname, "..");
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -105,7 +106,8 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     child,
     buffer: "",
     isStreaming: false,
-    nextRequestId: 1
+    nextRequestId: 1,
+    spokenSummaries: new Set()
   };
 
   agentProcesses.set(id, agentProcess);
@@ -329,6 +331,9 @@ function handleRpcMessage(agentProcess, rawLine) {
     case "message_update":
       handleMessageUpdate(agentProcess, message);
       break;
+    case "message_end":
+      handleMessageEnd(agentProcess, message);
+      break;
     case "tool_execution_start":
       emitAgentOutput(agentProcess.id, "system", `Running ${message.toolName}.`);
       break;
@@ -392,6 +397,21 @@ function handleMessageUpdate(agentProcess, message) {
   if (event.type === "error") {
     emitAgentOutput(agentProcess.id, "system", event.error || "PI reported an error.");
   }
+}
+
+function handleMessageEnd(agentProcess, message) {
+  const summary = extractSummaryText(extractMessageText(message.message));
+  if (!summary) {
+    return;
+  }
+
+  const dedupeKey = `${message.message?.id || ""}:${summary}`;
+  if (agentProcess.spokenSummaries.has(dedupeKey)) {
+    return;
+  }
+
+  agentProcess.spokenSummaries.add(dedupeKey);
+  speakSummary(summary, agentProcess.id);
 }
 
 function handleToolExecutionUpdate(agentProcess, message) {
@@ -468,5 +488,91 @@ function emitAgentModels(id, models) {
   mainWindow?.webContents.send("agent:models", {
     id,
     models
+  });
+}
+
+function extractMessageText(message) {
+  if (!message || message.role !== "assistant") {
+    return "";
+  }
+
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+
+  if (Array.isArray(message.content)) {
+    return message.content
+      .map((part) => {
+        if (typeof part === "string") {
+          return part;
+        }
+        if (part?.type === "text" && typeof part.text === "string") {
+          return part.text;
+        }
+        if (typeof part?.content === "string") {
+          return part.content;
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return "";
+}
+
+function extractSummaryText(text) {
+  const match = text.match(/(?:^|\n)\s*Summary:\s*([^\n]+)/i);
+  if (!match) {
+    return "";
+  }
+
+  return match[1].trim();
+}
+
+function speakSummary(summary, agentId) {
+  runQwenTts(summary)
+    .catch((error) => {
+      emitAgentOutput(agentId, "system", `Qwen TTS failed; using macOS voice. ${error.message}`);
+      return runMacTts(summary);
+    })
+    .catch((error) => {
+      emitAgentOutput(agentId, "system", `Text-to-speech failed: ${error.message}`);
+    });
+}
+
+function runQwenTts(text) {
+  return runSpeechCommand(path.join(repoRoot, "run"), [text], { cwd: repoRoot });
+}
+
+function runMacTts(text) {
+  if (process.platform !== "darwin") {
+    return Promise.reject(new Error("macOS say fallback is unavailable on this platform."));
+  }
+
+  return runSpeechCommand("osascript", ["-e", `say ${JSON.stringify(text)}`], { cwd: repoRoot });
+}
+
+function runSpeechCommand(command, args, options) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      ...options,
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(stderr.trim() || `speech command exited ${signal || `with code ${code}`}`));
+    });
   });
 }
