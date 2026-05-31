@@ -1,12 +1,18 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 let mainWindow;
 const agentProcesses = new Map();
 let cachedModels = null;
 const repoRoot = path.resolve(__dirname, "..");
+const speechState = {
+  owner: null,
+  active: null,
+  queue: []
+};
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -43,6 +49,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopActiveSpeech();
   for (const agentProcess of agentProcesses.values()) {
     agentProcess.child.kill();
   }
@@ -107,6 +114,7 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     buffer: "",
     isStreaming: false,
     nextRequestId: 1,
+    currentResponseText: "",
     spokenSummaries: new Set()
   };
 
@@ -189,12 +197,24 @@ ipcMain.handle("agent:message", async (_event, payload) => {
     return { ok: false, error: "PI session is not running." };
   }
 
+  releaseSpeechControl("User sent a chat message.");
+
   sendRpcCommand(agentProcess, {
     type: "prompt",
     message: payload.text,
     ...(agentProcess.isStreaming ? { streamingBehavior: "steer" } : {})
   });
 
+  return { ok: true };
+});
+
+ipcMain.handle("mic:claim", async (_event, payload) => {
+  claimUserMicrophone(payload?.id || null);
+  return { ok: true };
+});
+
+ipcMain.handle("mic:release", async () => {
+  releaseSpeechControl("User released the microphone.");
   return { ok: true };
 });
 
@@ -322,10 +342,12 @@ function handleRpcMessage(agentProcess, rawLine) {
       break;
     case "agent_start":
       agentProcess.isStreaming = true;
+      agentProcess.currentResponseText = "";
       emitAgentStatus(agentProcess.id, "running");
       break;
     case "agent_end":
       agentProcess.isStreaming = false;
+      speakAgentResponse(agentProcess, null);
       emitAgentStatus(agentProcess.id, "idle");
       break;
     case "message_update":
@@ -391,6 +413,7 @@ function handleMessageUpdate(agentProcess, message) {
   }
 
   if (event.type === "text_delta" && event.delta) {
+    agentProcess.currentResponseText += event.delta;
     emitAgentOutput(agentProcess.id, "agent", event.delta, { append: true });
   }
 
@@ -400,18 +423,24 @@ function handleMessageUpdate(agentProcess, message) {
 }
 
 function handleMessageEnd(agentProcess, message) {
-  const summary = extractSummaryText(extractMessageText(message.message));
-  if (!summary) {
+  speakAgentResponse(agentProcess, message.message);
+}
+
+function speakAgentResponse(agentProcess, message) {
+  const text = extractMessageText(message) || agentProcess.currentResponseText;
+  const speechText = extractSpeechText(text);
+  if (!speechText) {
     return;
   }
 
-  const dedupeKey = `${message.message?.id || ""}:${summary}`;
+  const dedupeKey = `${message?.id || ""}:${speechText}`;
   if (agentProcess.spokenSummaries.has(dedupeKey)) {
     return;
   }
 
   agentProcess.spokenSummaries.add(dedupeKey);
-  speakSummary(summary, agentProcess.id);
+  speakSummary(speechText, agentProcess.id);
+  agentProcess.currentResponseText = "";
 }
 
 function handleToolExecutionUpdate(agentProcess, message) {
@@ -530,35 +559,136 @@ function extractSummaryText(text) {
   return match[1].trim();
 }
 
+function extractSpeechText(text) {
+  return extractSummaryText(text);
+}
+
 function speakSummary(summary, agentId) {
-  runQwenTts(summary)
+  enqueueAgentSpeech(agentId, summary);
+}
+
+function enqueueAgentSpeech(agentId, text) {
+  if (speechState.owner?.type === "user") {
+    return;
+  }
+
+  const existingActiveForAgent = speechState.active?.agentId === agentId;
+  speechState.queue = speechState.queue.filter((job) => job.agentId !== agentId);
+  speechState.queue.push(createSpeechJob(agentId, text));
+
+  if (existingActiveForAgent) {
+    stopActiveSpeech();
+    return;
+  }
+
+  pumpSpeechQueue();
+}
+
+function createSpeechJob(agentId, text) {
+  return {
+    agentId,
+    text,
+    child: null,
+    cancelled: false
+  };
+}
+
+function claimUserMicrophone(agentId) {
+  speechState.owner = { type: "user", agentId };
+  speechState.queue = [];
+  stopActiveSpeech();
+  emitMicState();
+}
+
+function releaseSpeechControl() {
+  speechState.owner = null;
+  speechState.queue = [];
+  stopActiveSpeech();
+  emitMicState();
+}
+
+function stopActiveSpeech() {
+  const active = speechState.active;
+  if (!active) {
+    return;
+  }
+
+  active.cancelled = true;
+  if (active.child && !active.child.killed) {
+    active.child.kill();
+  }
+}
+
+function pumpSpeechQueue() {
+  if (speechState.active || speechState.owner?.type === "user") {
+    return;
+  }
+
+  const next = speechState.queue.shift();
+  if (!next) {
+    speechState.owner = null;
+    emitMicState();
+    return;
+  }
+
+  speechState.owner = { type: "agent", agentId: next.agentId };
+  speechState.active = next;
+  emitMicState();
+
+  runQwenTts(next)
     .catch((error) => {
-      emitAgentOutput(agentId, "system", `Qwen TTS failed; using macOS voice. ${error.message}`);
-      return runMacTts(summary);
+      if (!next.cancelled) {
+        emitAgentOutput(next.agentId, "system", `Qwen text-to-speech failed: ${error.message}`);
+      }
     })
-    .catch((error) => {
-      emitAgentOutput(agentId, "system", `Text-to-speech failed: ${error.message}`);
+    .finally(() => {
+      if (speechState.active === next) {
+        speechState.active = null;
+      }
+
+      if (speechState.owner?.type === "agent" && speechState.owner.agentId === next.agentId) {
+        speechState.owner = null;
+      }
+
+      emitMicState();
+      pumpSpeechQueue();
     });
 }
 
-function runQwenTts(text) {
-  return runSpeechCommand(path.join(repoRoot, "run"), [text], { cwd: repoRoot });
-}
+async function runQwenTts(job) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-tts-"));
+  const outputPath = path.join(tempDir, "speech.wav");
 
-function runMacTts(text) {
-  if (process.platform !== "darwin") {
-    return Promise.reject(new Error("macOS say fallback is unavailable on this platform."));
+  try {
+    await runSpeechCommand(
+      path.join(repoRoot, "run"),
+      [job.text, "--output", outputPath, "--no-play"],
+      { cwd: repoRoot },
+      job
+    );
+    if (!job.cancelled) {
+      await runSpeechCommand("afplay", [outputPath], { cwd: repoRoot }, job);
+    }
+  } finally {
+    fs.rm(tempDir, { recursive: true, force: true }, () => {});
   }
-
-  return runSpeechCommand("osascript", ["-e", `say ${JSON.stringify(text)}`], { cwd: repoRoot });
 }
 
-function runSpeechCommand(command, args, options) {
+function runSpeechCommand(command, args, options, job = null) {
   return new Promise((resolve, reject) => {
+    if (job?.cancelled) {
+      resolve();
+      return;
+    }
+
     const child = spawn(command, args, {
       ...options,
       stdio: ["ignore", "ignore", "pipe"]
     });
+
+    if (job) {
+      job.child = child;
+    }
 
     let stderr = "";
     child.stderr.on("data", (chunk) => {
@@ -567,6 +697,15 @@ function runSpeechCommand(command, args, options) {
 
     child.on("error", reject);
     child.on("exit", (code, signal) => {
+      if (job?.child === child) {
+        job.child = null;
+      }
+
+      if (job?.cancelled) {
+        resolve();
+        return;
+      }
+
       if (code === 0) {
         resolve();
         return;
@@ -574,5 +713,11 @@ function runSpeechCommand(command, args, options) {
 
       reject(new Error(stderr.trim() || `speech command exited ${signal || `with code ${code}`}`));
     });
+  });
+}
+
+function emitMicState() {
+  mainWindow?.webContents.send("mic:state", {
+    owner: speechState.owner
   });
 }

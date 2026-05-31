@@ -34,8 +34,48 @@ input {
   padding: 36px;
 }
 
+.session-strip {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 14px;
+}
+
+.mic-holder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 220px;
+  padding: 10px 14px;
+  border: 2px solid #d7ddd1;
+  border-radius: 8px;
+  background: #fbfffb;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.mic-holder.active {
+  border-color: var(--line);
+  background: #eaf3ff;
+  color: var(--line);
+}
+
+.mic-holder-label {
+  color: inherit;
+  text-transform: uppercase;
+}
+
+.mic-holder-value {
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+}
+
 .screen {
-  min-height: calc(100vh - 72px);
+  min-height: calc(100vh - 116px);
   border: 2px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.62);
@@ -216,6 +256,7 @@ h1 {
   border-radius: 8px;
   line-height: 1.35;
   font-size: 13px;
+  white-space: pre-wrap;
   word-break: break-word;
 }
 
@@ -279,6 +320,16 @@ h1 {
   padding: 0 10px;
   border-color: var(--line);
   color: var(--line);
+}
+
+.chat-entry .mic-button.active {
+  border-color: var(--accent);
+  background: #fff5f2;
+  color: var(--accent);
+}
+
+.chat-entry .mic-button.speaking {
+  background: #eaf3ff;
 }
 
 .role-picker {
@@ -354,8 +405,12 @@ h1 {
     padding: 18px;
   }
 
+  .mic-holder {
+    width: 100%;
+  }
+
   .screen {
-    min-height: calc(100vh - 36px);
+    min-height: calc(100vh - 80px);
   }
 
   .primary-action {
