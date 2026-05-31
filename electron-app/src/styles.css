@@ -245,7 +245,7 @@ h1 {
 
 .chat-entry {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 8px;
   padding: 12px 16px 16px;
 }
@@ -279,6 +279,25 @@ h1 {
   padding: 0 10px;
   border-color: var(--line);
   color: var(--line);
+}
+
+.chat-entry .abort-button {
+  min-width: 56px;
+  padding: 0 10px;
+}
+
+.chat-entry .abort-button:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-entry .abort-button:not(:disabled):hover {
+  background: #fff0ee;
+}
+
+.chat-entry .abort-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .role-picker {

@@ -211,6 +211,16 @@ ipcMain.handle("agent:setModel", async (_event, payload) => {
   return { ok: true };
 });
 
+ipcMain.handle("agent:abort", async (_event, payload) => {
+  const agentProcess = agentProcesses.get(payload.id);
+  if (!agentProcess || agentProcess.child.killed || !agentProcess.child.stdin.writable) {
+    return { ok: false, error: "PI session is not running." };
+  }
+
+  sendRpcCommand(agentProcess, { type: "abort" });
+  return { ok: true };
+});
+
 function fetchAvailableModels(cwd) {
   return new Promise((resolve) => {
     let settled = false;

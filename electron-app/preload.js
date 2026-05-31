@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("piFlow", {
   listModels: (payload) => ipcRenderer.invoke("models:list", payload),
   createAgent: (payload) => ipcRenderer.invoke("agent:create", payload),
   sendMessage: (payload) => ipcRenderer.invoke("agent:message", payload),
+  abortAgent: (payload) => ipcRenderer.invoke("agent:abort", payload),
   setModel: (payload) => ipcRenderer.invoke("agent:setModel", payload),
   onAgentOutput: (callback) => {
     const handler = (_event, payload) => callback(payload);

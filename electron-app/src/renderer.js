@@ -1,30 +1,3 @@
-const AGENT_ROLES = [
-  {
-    id: "software-engineer",
-    label: "Software Engineer",
-    systemPrompt:
-      "You are a senior software engineer joining this project. Focus on implementation, code quality, debugging, and pragmatic technical decisions. Work directly in the current folder, follow existing conventions, keep changes minimal and well-tested, and explain trade-offs clearly. Ask clarifying questions when requirements are ambiguous before writing code."
-  },
-  {
-    id: "project-manager",
-    label: "Project Manager",
-    systemPrompt:
-      "You are an experienced project manager for this project. Focus on scope, priorities, timelines, risks, and coordination. Break work into clear actionable tasks, surface dependencies and blockers, and keep the team aligned on goals. Prefer concise status summaries and explicit next steps over writing code."
-  },
-  {
-    id: "designer",
-    label: "Designer",
-    systemPrompt:
-      "You are a product designer for this project. Focus on user experience, interface layout, visual hierarchy, accessibility, and design consistency. Propose clear UX flows and concrete UI improvements, reference existing styles and components, and explain the reasoning behind design choices."
-  },
-  {
-    id: "qa-tester",
-    label: "QA Tester",
-    systemPrompt:
-      "You are a meticulous QA tester for this project. Focus on test plans, edge cases, reproduction steps, and verification. Identify potential failure modes and regressions, write clear test cases, and confirm whether behavior matches expectations. Be specific about how to reproduce and validate each issue."
-  }
-];
-
 const state = {
   folder: null,
   agents: []
@@ -182,9 +155,39 @@ async function addAgent(role, model) {
   });
 
   agent.role = role.label;
+  agent.status = "idle";
   state.agents.push(agent);
   renderAgents();
   showScreen("agents");
+}
+
+function agentCanAbort(agent) {
+  return agent?.status === "running" || agent?.status === "queued";
+}
+
+function updateAbortButton(agentId) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  const abortButton = document.querySelector(`.abort-button[data-agent-id="${agentId}"]`);
+  if (!abortButton || !agent) {
+    return;
+  }
+
+  abortButton.disabled = !agentCanAbort(agent);
+}
+
+async function abortAgent(agent) {
+  if (!agent || !agentCanAbort(agent)) {
+    return;
+  }
+
+  const result = await window.piFlow.abortAgent({ id: agent.id });
+  if (!result.ok) {
+    agent.transcript.push({ role: "system", text: result.error });
+    const log = document.querySelector(`.chat-log[data-agent-id="${agent.id}"]`);
+    if (log) {
+      renderTranscript(log, agent.transcript);
+    }
+  }
 }
 
 function renderAgents() {
@@ -192,6 +195,10 @@ function renderAgents() {
 }
 
 function createAgentCard(agent) {
+  if (!agent.status) {
+    agent.status = "idle";
+  }
+
   const card = document.createElement("article");
   card.className = "agent-card";
 
@@ -246,13 +253,33 @@ function createAgentCard(agent) {
   mic.ariaLabel = `Voice input for ${agent.title}`;
   mic.title = "Voice input";
 
+  const abort = document.createElement("button");
+  abort.type = "button";
+  abort.className = "abort-button";
+  abort.dataset.agentId = agent.id;
+  abort.textContent = "Stop";
+  abort.disabled = true;
+  abort.ariaLabel = `Stop ${agent.title}`;
+  abort.title = "Stop the current agent turn (Escape while typing)";
+  abort.addEventListener("click", () => abortAgent(agent));
+
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.textContent = "Send";
 
-  form.append(input, mic, submit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !agentCanAbort(agent)) {
+      return;
+    }
+
+    event.preventDefault();
+    abortAgent(agent);
+  });
+
+  form.append(input, mic, abort, submit);
   form.addEventListener("submit", handleChatSubmit);
   card.append(header, messages, form);
+  updateAbortButton(agent.id);
   return card;
 }
 
@@ -388,6 +415,7 @@ window.piFlow.onAgentStatus((payload) => {
   }
 
   agent.status = payload.status;
+  updateAbortButton(payload.id);
   if (payload.model && typeof payload.model === "object") {
     agent.modelInfo = payload.model;
     agent.model = modelLabel(payload.model);
