@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("piFlow", {
   chooseFolder: () => ipcRenderer.invoke("folder:choose"),
   listModels: (payload) => ipcRenderer.invoke("models:list", payload),
+  getStoredState: () => ipcRenderer.invoke("storage:get-state"),
   createAgent: (payload) => ipcRenderer.invoke("agent:create", payload),
   sendMessage: (payload) => ipcRenderer.invoke("agent:message", payload),
   setModel: (payload) => ipcRenderer.invoke("agent:setModel", payload),

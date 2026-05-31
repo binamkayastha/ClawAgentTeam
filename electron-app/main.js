@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const storage = require("./storage");
 
 let mainWindow;
 const agentProcesses = new Map();
@@ -58,10 +59,11 @@ ipcMain.handle("folder:choose", async () => {
   }
 
   const folderPath = result.filePaths[0];
-  return {
-    name: path.basename(folderPath) || folderPath,
-    path: folderPath
-  };
+  return storage.upsertFolder(folderPath);
+});
+
+ipcMain.handle("storage:get-state", async () => {
+  return storage.getStateForRenderer();
 });
 
 ipcMain.handle("models:list", async (_event, payload) => {
