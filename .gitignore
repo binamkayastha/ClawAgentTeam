@@ -1,0 +1,7 @@
+.venv/
+out/
+*.wav
+*.aiff
+*.mp3
+*.flac
+__pycache__/
