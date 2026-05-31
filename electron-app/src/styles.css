@@ -40,8 +40,10 @@ body {
   margin: 0;
   min-width: 760px;
   min-height: 580px;
+  display: flex;
+  color: var(--ink);
 
-background:
+  background:
     radial-gradient(circle at 20% 10%, rgba(79,93,117,0.06), transparent 40%),
     radial-gradient(circle at 80% 90%, rgba(122,74,58,0.04), transparent 45%),
 
@@ -75,8 +77,178 @@ input {
 
 /* App shell feels like a printed spread margin */
 .app-shell {
+  flex: 1;
+  min-width: 0;
   min-height: 100vh;
   padding: 40px;
+}
+
+.summary-panel {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  min-width: 280px;
+  min-height: 100vh;
+  border-left: 2px solid var(--line);
+  background: var(--panel);
+  box-shadow: -8px 0 24px rgba(29, 38, 49, 0.06);
+}
+
+.summary-panel.hidden {
+  display: none;
+}
+
+.summary-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 18px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.summary-panel-header h2 {
+  color: var(--line);
+  font-size: 16px;
+  font-weight: 780;
+}
+
+.relay-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+}
+
+.relay-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.relay-toggle input {
+  cursor: pointer;
+}
+
+.relay-info-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 50%;
+  background: #fbfffb;
+  color: var(--line);
+  font-size: 11px;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  cursor: help;
+}
+
+.relay-info-tip:hover,
+.relay-info-tip:focus-visible {
+  background: #edf6ff;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--line-soft);
+}
+
+.relay-info-tooltip {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 30;
+  width: min(280px, 70vw);
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  text-align: left;
+  pointer-events: none;
+}
+
+.relay-info-tooltip p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.relay-info-tooltip p + p {
+  margin-top: 8px;
+}
+
+.relay-info-tip:hover .relay-info-tooltip,
+.relay-info-tip:focus-visible .relay-info-tooltip {
+  display: block;
+}
+
+.summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  overflow: auto;
+  padding: 14px 16px 18px;
+}
+
+.summary-entry {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #e4e8e0;
+  border-radius: 8px;
+  background: #fafbf8;
+}
+
+.summary-entry-ack {
+  opacity: 0.75;
+  background: #f4f5f2;
+}
+
+.summary-entry-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.summary-entry-sender {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.summary-entry-time {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.summary-entry-text {
+  color: #30342f;
+  font-size: 13px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.summary-entry-depth {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 /* Main container becomes “sheet on paper” */
@@ -389,10 +561,24 @@ h1 {
   color: #1f2a44;
 }
 
+/* RELAY = incoming teammate summary */
+.chat-message.relay {
+  align-self: flex-start;
+
+  border-left: 3px solid var(--line);
+  padding-left: 10px;
+
+  background: rgba(27, 112, 201, 0.06);
+  color: #143f6e;
+
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
 /* INPUT = editorial control bar */
 .chat-entry {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 8px;
 
   padding: 12px 16px 16px;
@@ -441,6 +627,25 @@ h1 {
   border-color: var(--line);
   color: var(--line);
   transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.chat-entry .abort-button {
+  min-width: 56px;
+  padding: 0 10px;
+}
+
+.chat-entry .abort-button:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-entry .abort-button:not(:disabled):hover {
+  background: #fff0ee;
+}
+
+.chat-entry .abort-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .chat-entry .mic-button.recording {
@@ -524,10 +729,21 @@ h1 {
 @media (max-width: 860px) {
   body {
     min-width: 0;
+    flex-direction: column;
   }
 
   .app-shell {
     padding: 18px;
+  }
+
+  .summary-panel {
+    width: 100%;
+    min-width: 0;
+    min-height: 240px;
+    max-height: 40vh;
+    border-left: none;
+    border-top: 2px solid var(--line);
+    box-shadow: none;
   }
 
   .screen {

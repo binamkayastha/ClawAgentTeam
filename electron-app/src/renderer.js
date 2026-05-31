@@ -1,30 +1,3 @@
-const AGENT_ROLES = [
-  {
-    id: "software-engineer",
-    label: "Software Engineer",
-    systemPrompt:
-      "You are a senior software engineer joining this project. Focus on implementation, code quality, debugging, and pragmatic technical decisions. Work directly in the current folder, follow existing conventions, keep changes minimal and well-tested, and explain trade-offs clearly. Ask clarifying questions when requirements are ambiguous before writing code."
-  },
-  {
-    id: "project-manager",
-    label: "Project Manager",
-    systemPrompt:
-      "You are an experienced project manager for this project. Focus on scope, priorities, timelines, risks, and coordination. Break work into clear actionable tasks, surface dependencies and blockers, and keep the team aligned on goals. Prefer concise status summaries and explicit next steps over writing code."
-  },
-  {
-    id: "designer",
-    label: "Designer",
-    systemPrompt:
-      "You are a product designer for this project. Focus on user experience, interface layout, visual hierarchy, accessibility, and design consistency. Propose clear UX flows and concrete UI improvements, reference existing styles and components, and explain the reasoning behind design choices."
-  },
-  {
-    id: "qa-tester",
-    label: "QA Tester",
-    systemPrompt:
-      "You are a meticulous QA tester for this project. Focus on test plans, edge cases, reproduction steps, and verification. Identify potential failure modes and regressions, write clear test cases, and confirm whether behavior matches expectations. Be specific about how to reproduce and validate each issue."
-  }
-];
-
 const voiceState = new Map();
 
 async function getMediaRecorder() {
@@ -131,6 +104,9 @@ const roleSelect = document.querySelector("#agentRoleSelect");
 const modelSelect = document.querySelector("#agentModelSelect");
 const roleCreateButton = document.querySelector("#agentRoleCreate");
 const roleCancelButton = document.querySelector("#agentRoleCancel");
+const summaryPanel = document.querySelector("#summaryPanel");
+const summaryList = document.querySelector("#summaryList");
+const relayToggle = document.querySelector("#relayToggle");
 
 let availableModels = null;
 
@@ -199,6 +175,7 @@ function showScreen(name) {
   emptyState.classList.toggle("hidden", name !== "empty");
   setupState.classList.toggle("hidden", name !== "setup");
   agentsState.classList.toggle("hidden", name !== "agents");
+  summaryPanel.classList.toggle("hidden", name !== "agents");
 }
 
 function setFolder(folder) {
@@ -258,20 +235,58 @@ async function addAgent(role, model) {
     return;
   }
 
+  const index = state.agents.length + 1;
+  const agentName = `${role.label} #${index}`;
+  registerAgentName(agentName);
+
+  const systemPrompt = `${role.systemPrompt}\n\n${SUMMARY_INSTRUCTION(agentName)}`;
+
   const agent = await window.piFlow.createAgent({
-    index: state.agents.length + 1,
+    index,
     folderName: state.folder.name,
     folderPath: state.folder.path,
     roleId: role.id,
     roleLabel: role.label,
-    systemPrompt: role.systemPrompt,
+    agentName,
+    systemPrompt,
     ...(model ? { provider: model.provider, modelId: model.modelId } : {})
   });
 
   agent.role = role.label;
+  agent.status = "idle";
+  agent.agentName = agentName;
   state.agents.push(agent);
   renderAgents();
   showScreen("agents");
+}
+
+function agentCanAbort(agent) {
+  return agent?.status === "running" || agent?.status === "queued";
+}
+
+function updateAbortButton(agentId) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  const abortButton = document.querySelector(`.abort-button[data-agent-id="${agentId}"]`);
+  if (!abortButton || !agent) {
+    return;
+  }
+
+  abortButton.disabled = !agentCanAbort(agent);
+}
+
+async function abortAgent(agent) {
+  if (!agent || !agentCanAbort(agent)) {
+    return;
+  }
+
+  const result = await window.piFlow.abortAgent({ id: agent.id });
+  if (!result.ok) {
+    agent.transcript.push({ role: "system", text: result.error });
+    const log = document.querySelector(`.chat-log[data-agent-id="${agent.id}"]`);
+    if (log) {
+      renderTranscript(log, agent.transcript);
+    }
+  }
 }
 
 function renderAgents() {
@@ -279,6 +294,10 @@ function renderAgents() {
 }
 
 function createAgentCard(agent) {
+  if (!agent.status) {
+    agent.status = "idle";
+  }
+
   const card = document.createElement("article");
   card.className = `agent-card agent-color-${agent.colorIndex ?? 0}`;
 
@@ -333,15 +352,35 @@ function createAgentCard(agent) {
   mic.ariaLabel = `Voice input for ${agent.title}`;
   mic.title = "Voice input";
 
+  const abort = document.createElement("button");
+  abort.type = "button";
+  abort.className = "abort-button";
+  abort.dataset.agentId = agent.id;
+  abort.textContent = "Stop";
+  abort.disabled = true;
+  abort.ariaLabel = `Stop ${agent.title}`;
+  abort.title = "Stop the current agent turn (Escape while typing)";
+  abort.addEventListener("click", () => abortAgent(agent));
+
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.textContent = "Send";
 
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !agentCanAbort(agent)) {
+      return;
+    }
+
+    event.preventDefault();
+    abortAgent(agent);
+  });
+
   mic.addEventListener("click", () => toggleRecording(agent.id, mic));
 
-  form.append(input, mic, submit);
+  form.append(input, mic, abort, submit);
   form.addEventListener("submit", handleChatSubmit);
   card.append(header, messages, form);
+  updateAbortButton(agent.id);
   return card;
 }
 
@@ -435,6 +474,50 @@ function populateRoleOptions() {
   );
 }
 
+function formatSummaryTime(timestamp) {
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function appendSummaryEntry(payload) {
+  const entry = document.createElement("article");
+  entry.className = "summary-entry";
+  if (payload.ack) {
+    entry.classList.add("summary-entry-ack");
+  }
+
+  const header = document.createElement("div");
+  header.className = "summary-entry-header";
+
+  const sender = document.createElement("strong");
+  sender.className = "summary-entry-sender";
+  sender.textContent = payload.fromName;
+
+  const time = document.createElement("time");
+  time.className = "summary-entry-time";
+  time.dateTime = payload.timestamp;
+  time.textContent = formatSummaryTime(payload.timestamp);
+
+  header.append(sender, time);
+
+  const body = document.createElement("p");
+  body.className = "summary-entry-text";
+  const prefix = payload.ack ? "ACK — " : "";
+  body.textContent = `${prefix}${payload.text}`;
+
+  if (payload.depth) {
+    const depth = document.createElement("span");
+    depth.className = "summary-entry-depth";
+    depth.textContent = `depth ${payload.depth}/${MAX_RELAY_DEPTH}`;
+    entry.append(header, body, depth);
+  } else {
+    entry.append(header, body);
+  }
+
+  summaryList.append(entry);
+  summaryList.scrollTop = summaryList.scrollHeight;
+}
+
 populateRoleOptions();
 
 chooseFolderButton.addEventListener("click", chooseFolder);
@@ -442,6 +525,9 @@ createFirstAgentButton.addEventListener("click", openRolePicker);
 addAgentButton.addEventListener("click", openRolePicker);
 roleCreateButton.addEventListener("click", confirmRolePicker);
 roleCancelButton.addEventListener("click", closeRolePicker);
+relayToggle.addEventListener("change", async () => {
+  await window.piFlow.setRelay({ enabled: relayToggle.checked });
+});
 rolePicker.addEventListener("click", (event) => {
   if (event.target === rolePicker) {
     closeRolePicker();
@@ -477,6 +563,7 @@ window.piFlow.onAgentStatus((payload) => {
   }
 
   agent.status = payload.status;
+  updateAbortButton(payload.id);
   if (payload.model && typeof payload.model === "object") {
     agent.modelInfo = payload.model;
     agent.model = modelLabel(payload.model);
@@ -511,6 +598,23 @@ window.piFlow.onAgentModels((payload) => {
   if (cardModelSelect) {
     populateModelSelect(cardModelSelect, payload.models, { includeDefault: false });
     applyCardModelSelection(cardModelSelect, agent.modelInfo);
+  }
+});
+
+window.piFlow.onAgentSummary((payload) => {
+  appendSummaryEntry(payload);
+});
+
+window.piFlow.onAgentRelay((payload) => {
+  const agent = state.agents.find((item) => item.id === payload.id);
+  if (!agent) {
+    return;
+  }
+
+  agent.transcript.push({ role: "relay", text: payload.text });
+  const log = document.querySelector(`.chat-log[data-agent-id="${payload.id}"]`);
+  if (log) {
+    renderTranscript(log, agent.transcript);
   }
 });
 

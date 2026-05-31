@@ -41,6 +41,31 @@
       </section>
     </main>
 
+    <aside id="summaryPanel" class="summary-panel hidden" aria-label="Team Chat">
+      <header class="summary-panel-header">
+        <h2>Team Chat</h2>
+        <div class="relay-controls">
+          <label class="relay-toggle">
+            <input id="relayToggle" type="checkbox" checked />
+            <span>Relay</span>
+          </label>
+          <button
+            id="relayInfoTip"
+            type="button"
+            class="relay-info-tip"
+            aria-label="About relay"
+          >
+            i
+            <span class="relay-info-tooltip" role="tooltip">
+              <p>When Relay is on (default): after an agent finishes a turn and produces a substantive Summary: line, that summary is sent to every other agent as a new prompt and shown in Team Chat.</p>
+              <p>When Relay is off: summaries still appear in Team Chat, but they are not forwarded to other agents.</p>
+            </span>
+          </button>
+        </div>
+      </header>
+      <div id="summaryList" class="summary-list" aria-live="polite"></div>
+    </aside>
+
     <div id="agentRolePicker" class="role-picker hidden" role="dialog" aria-modal="true" aria-labelledby="agentRoleTitle">
       <div class="role-picker-card">
         <h2 id="agentRoleTitle">Choose agent type</h2>
@@ -55,6 +80,8 @@
       </div>
     </div>
 
+    <script src="./agent-roles.js"></script>
+    <script src="./agent-constants.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>
