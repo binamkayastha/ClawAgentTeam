@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project overview
 
 Multi-agent real-time conversation system. Electron frontend with voice input, Python backend for speech-to-text, Pi RPC subprocesses as agent backends.
@@ -23,6 +25,24 @@ npm install
 npm start
 ```
 
+### TTS (optional, Apple Silicon only)
+
+```bash
+./run "Hello world"                        # generate and play speech
+./run "Hello world" --voice ryan           # specify voice
+./run "Hello world" --output out.wav --no-play
+```
+
+Available voices: `serena, vivian, uncle_fu, ryan, aiden, ono_anna, sohee, eric, dylan`
+
+## Setup on a new machine
+
+```bash
+./setup.sh
+```
+
+Installs Node.js dependencies, the `pi` CLI (`@earendil-works/pi-coding-agent`), and the Python TTS venv. See setup.sh for full details.
+
 ## Key architecture decisions
 
 - Voice audio goes: renderer (MediaRecorder) → main process (IPC) → Python backend (HTTP) → Google Speech API (REST transport). Direct fetch from renderer to backend doesn't work due to Electron's `file://` security restrictions.
@@ -34,5 +54,8 @@ npm start
 - `electron-app/main.js` — Electron main process, Pi RPC management, audio transcription IPC handler
 - `electron-app/preload.js` — IPC bridge exposing `piFlow` API to renderer
 - `electron-app/src/renderer.js` — UI logic, voice recording, agent cards
-- `backend/server.py` — FastAPI server with `/transcribe` endpoint
+- `backend/server.py` — FastAPI server with `/transcribe` endpoint (Google Cloud Speech)
+- `backend/requirements.txt` — Python dependencies for the backend
+- `tts.py` + `run` — Standalone Qwen3-TTS TTS using `mlx-audio` (Apple Silicon only)
 - `plan.md` — Project plan with progress tracking
+- `feature-gaps/windows-and-linux-support` — Research on cross-platform TTS options
