@@ -42,8 +42,12 @@ if ! command -v gcloud &>/dev/null; then
 fi
 
 # ── pi CLI ────────────────────────────────────────────────────────────────────
-echo "Installing pi coding agent..."
-npm install -g @earendil-works/pi-coding-agent
+if command -v pi &>/dev/null; then
+  echo "pi coding agent already installed ($(pi --version 2>/dev/null || echo 'version unknown')), skipping."
+else
+  echo "Installing pi coding agent..."
+  npm install -g @earendil-works/pi-coding-agent
+fi
 
 # ── Electron app ──────────────────────────────────────────────────────────────
 echo "Installing Electron app dependencies..."
@@ -56,6 +60,7 @@ if [[ ! -x backend/.venv/bin/python ]]; then
 fi
 backend/.venv/bin/python -m pip install -q -U pip
 backend/.venv/bin/python -m pip install -q -r backend/requirements.txt
+backend/.venv/bin/python -m pip install -q wandb weave
 
 # ── TTS venv ──────────────────────────────────────────────────────────────────
 echo "Setting up TTS Python venv..."
