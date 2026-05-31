@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 let agentCounter = 0;
@@ -8,6 +9,69 @@ let agentCounter = 0;
 let mainWindow;
 const agentProcesses = new Map();
 let cachedModels = null;
+let relayEnabled = true;
+const repoRoot = path.resolve(__dirname, "..");
+const speechState = {
+  owner: null,
+  active: null,
+  queue: []
+};
+
+const MAX_RELAY_DEPTH = 10;
+
+function isAckSummary(text) {
+  return /^\s*ACK\s*[—-]\s*no action needed\s*$/i.test((text || "").trim());
+}
+
+function extractSummary(text) {
+  if (!text) {
+    return null;
+  }
+
+  const lineMatches = [...text.matchAll(/^\s*(?:#{1,6}\s*|\*{1,2})?Summary:\*{0,2}\s*(.+)$/gim)];
+  if (lineMatches.length) {
+    return lineMatches[lineMatches.length - 1][1].trim();
+  }
+
+  const inlineMatch = text.match(/(?:^|\n)\s*(?:#{1,6}\s*|\*{1,2})?Summary:\*{0,2}\s*(.+)$/is);
+  if (inlineMatch) {
+    return inlineMatch[1].trim();
+  }
+
+  return null;
+}
+
+function extractSummaryFromMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return null;
+  }
+
+  const parts = [];
+  for (const msg of messages) {
+    if (msg?.role !== "assistant" || !Array.isArray(msg.content)) {
+      continue;
+    }
+
+    for (const block of msg.content) {
+      if (block?.type === "text" && typeof block.text === "string") {
+        parts.push(block.text);
+      }
+    }
+  }
+
+  if (!parts.length) {
+    return null;
+  }
+
+  return extractSummary(parts.join("\n\n"));
+}
+
+function noteSummaryCandidate(agentProcess, text) {
+  const candidate = extractSummary(text);
+  if (candidate) {
+    agentProcess.lastSummaryText = candidate;
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -44,6 +108,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopActiveSpeech();
   for (const agentProcess of agentProcesses.values()) {
     agentProcess.child.kill();
   }
@@ -120,12 +185,21 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     stdio: ["pipe", "pipe", "pipe"]
   });
 
+  const roleLabel = payload.roleLabel || "Pi Agent";
+
   const agentProcess = {
     id,
     child,
     buffer: "",
     isStreaming: false,
-    nextRequestId: 1
+    nextRequestId: 1,
+    name: payload.agentName || `${roleLabel} #${payload.index}`,
+    currentResponse: "",
+    lastSummaryText: null,
+    incomingDepth: 0,
+    skipNextBroadcast: false,
+    systemPrompt: payload.systemPrompt || null,
+    spokenSummaries: new Set()
   };
 
   agentProcesses.set(id, agentProcess);
@@ -167,21 +241,12 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     });
   });
 
-  const roleLabel = payload.roleLabel || "Pi Agent";
-
   sendRpcCommand(agentProcess, {
     type: "set_session_name",
     name: `${roleLabel} - ${payload.folderName} - ${now.toLocaleString()}`
   });
   sendRpcCommand(agentProcess, { type: "get_state" });
   sendRpcCommand(agentProcess, { type: "get_available_models" });
-
-  if (payload.systemPrompt) {
-    sendRpcCommand(agentProcess, {
-      type: "prompt",
-      message: payload.systemPrompt
-    });
-  }
 
   const transcript = [
     {
@@ -216,13 +281,33 @@ ipcMain.handle("agent:message", async (_event, payload) => {
     return { ok: false, error: "PI session is not running." };
   }
 
+  agentProcess.incomingDepth = 0;
+  agentProcess.currentResponse = "";
+  agentProcess.lastSummaryText = null;
+  releaseSpeechControl();
+
   sendRpcCommand(agentProcess, {
     type: "prompt",
-    message: payload.text,
+    message: buildAgentPrompt(agentProcess, payload.text),
     ...(agentProcess.isStreaming ? { streamingBehavior: "steer" } : {})
   });
 
   return { ok: true };
+});
+
+ipcMain.handle("mic:claim", async (_event, payload) => {
+  claimUserMicrophone(payload?.id || null);
+  return { ok: true };
+});
+
+ipcMain.handle("mic:release", async () => {
+  releaseSpeechControl();
+  return { ok: true };
+});
+
+ipcMain.handle("agent:setRelay", async (_event, payload) => {
+  relayEnabled = Boolean(payload?.enabled);
+  return { ok: true, enabled: relayEnabled };
 });
 
 ipcMain.handle("agent:setModel", async (_event, payload) => {
@@ -237,6 +322,16 @@ ipcMain.handle("agent:setModel", async (_event, payload) => {
     modelId: payload.modelId
   });
 
+  return { ok: true };
+});
+
+ipcMain.handle("agent:abort", async (_event, payload) => {
+  const agentProcess = agentProcesses.get(payload.id);
+  if (!agentProcess || agentProcess.child.killed || !agentProcess.child.stdin.writable) {
+    return { ok: false, error: "PI session is not running." };
+  }
+
+  sendRpcCommand(agentProcess, { type: "abort" });
   return { ok: true };
 });
 
@@ -311,6 +406,16 @@ function cleanStreamingOutput(chunk) {
   return chunk.toString("utf8").replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
 }
 
+function buildAgentPrompt(agentProcess, text) {
+  if (!agentProcess.systemPrompt) {
+    return text;
+  }
+
+  const message = `${agentProcess.systemPrompt}\n\n${text}`;
+  agentProcess.systemPrompt = null;
+  return message;
+}
+
 function sendRpcCommand(agentProcess, command) {
   const message = {
     id: `req-${agentProcess.id}-${agentProcess.nextRequestId++}`,
@@ -355,6 +460,7 @@ function handleRpcMessage(agentProcess, rawLine) {
     case "agent_end":
       agentProcess.isStreaming = false;
       emitAgentStatus(agentProcess.id, "idle");
+      finalizeTurn(agentProcess, message);
       break;
     case "message_update":
       handleMessageUpdate(agentProcess, message);
@@ -419,7 +525,14 @@ function handleMessageUpdate(agentProcess, message) {
   console.log("[main] message_update event.type:", event.type, "delta:", (event.delta || "").slice(0, 100));
 
   if (event.type === "text_delta" && event.delta) {
+    const cleaned = cleanStreamingOutput(event.delta);
+    agentProcess.currentResponse += cleaned;
+    noteSummaryCandidate(agentProcess, agentProcess.currentResponse);
     emitAgentOutput(agentProcess.id, "agent", event.delta, { append: true });
+  }
+
+  if (event.type === "text_end" && typeof event.content === "string" && event.content) {
+    noteSummaryCandidate(agentProcess, `${agentProcess.currentResponse}${cleanStreamingOutput(event.content)}`);
   }
 
   if (event.type === "error") {
@@ -501,5 +614,263 @@ function emitAgentModels(id, models) {
   mainWindow?.webContents.send("agent:models", {
     id,
     models
+  });
+}
+
+function emitAgentSummary(payload) {
+  mainWindow?.webContents.send("agent:summary", payload);
+}
+
+function emitAgentRelay(payload) {
+  mainWindow?.webContents.send("agent:relay", payload);
+}
+
+function finalizeTurn(agentProcess, endMessage = null) {
+  const summaryText =
+    extractSummary(agentProcess.currentResponse) ||
+    agentProcess.lastSummaryText ||
+    extractSummaryFromMessages(endMessage?.messages);
+
+  agentProcess.currentResponse = "";
+  agentProcess.lastSummaryText = null;
+
+  if (agentProcess.skipNextBroadcast) {
+    agentProcess.skipNextBroadcast = false;
+    return;
+  }
+
+  if (!summaryText) {
+    console.log("[main] finalizeTurn: no summary found for", agentProcess.name);
+    return;
+  }
+
+  console.log("[main] finalizeTurn: summary from", agentProcess.name, ":", summaryText.slice(0, 120));
+
+  const timestamp = new Date().toISOString();
+  const summaryPayload = {
+    fromId: agentProcess.id,
+    fromName: agentProcess.name,
+    text: summaryText,
+    depth: agentProcess.incomingDepth + 1,
+    timestamp
+  };
+
+  if (isAckSummary(summaryText)) {
+    emitAgentSummary({ ...summaryPayload, ack: true });
+    return;
+  }
+
+  const outgoingDepth = agentProcess.incomingDepth + 1;
+
+  emitAgentSummary({ ...summaryPayload, depth: outgoingDepth });
+  speakSummary(summaryText, agentProcess.id);
+
+  if (outgoingDepth > MAX_RELAY_DEPTH) {
+    return;
+  }
+
+  broadcastSummary(agentProcess, summaryText, outgoingDepth);
+}
+
+function broadcastSummary(sender, summaryText, depth) {
+  if (!relayEnabled) {
+    console.log("[main] broadcastSummary: relay disabled, skipping");
+    return;
+  }
+
+  const relayMessage = `[Relay depth ${depth}/${MAX_RELAY_DEPTH}]\nFrom ${sender.name}: Summary: ${summaryText}`;
+
+  for (const [targetId, target] of agentProcesses) {
+    if (targetId === sender.id) {
+      continue;
+    }
+
+    if (target.child.killed || !target.child.stdin.writable) {
+      console.log("[main] broadcastSummary: skipping dead/unwritable agent", target.name);
+      continue;
+    }
+
+    console.log("[main] broadcastSummary: sending to", target.name);
+
+    target.incomingDepth = depth;
+
+    sendRpcCommand(target, {
+      type: "prompt",
+      message: buildAgentPrompt(target, relayMessage),
+      ...(target.isStreaming ? { streamingBehavior: "steer" } : {})
+    });
+
+    emitAgentRelay({
+      id: targetId,
+      fromName: sender.name,
+      text: relayMessage,
+      depth
+    });
+  }
+}
+
+function speakSummary(summary, agentId) {
+  const agentProcess = agentProcesses.get(agentId);
+  const dedupeKey = `${agentId}:${summary}`;
+  if (agentProcess?.spokenSummaries?.has(dedupeKey)) {
+    return;
+  }
+
+  agentProcess?.spokenSummaries?.add(dedupeKey);
+  enqueueAgentSpeech(agentId, summary);
+}
+
+function enqueueAgentSpeech(agentId, text) {
+  if (speechState.owner?.type === "user") {
+    return;
+  }
+
+  const existingActiveForAgent = speechState.active?.agentId === agentId;
+  speechState.queue = speechState.queue.filter((job) => job.agentId !== agentId);
+  speechState.queue.push(createSpeechJob(agentId, text));
+
+  if (existingActiveForAgent) {
+    stopActiveSpeech();
+    return;
+  }
+
+  pumpSpeechQueue();
+}
+
+function createSpeechJob(agentId, text) {
+  return {
+    agentId,
+    text,
+    child: null,
+    cancelled: false
+  };
+}
+
+function claimUserMicrophone(agentId) {
+  speechState.owner = { type: "user", agentId };
+  speechState.queue = [];
+  stopActiveSpeech();
+  emitMicState();
+}
+
+function releaseSpeechControl() {
+  speechState.owner = null;
+  speechState.queue = [];
+  stopActiveSpeech();
+  emitMicState();
+}
+
+function stopActiveSpeech() {
+  const active = speechState.active;
+  if (!active) {
+    return;
+  }
+
+  active.cancelled = true;
+  if (active.child && !active.child.killed) {
+    active.child.kill();
+  }
+}
+
+function pumpSpeechQueue() {
+  if (speechState.active || speechState.owner?.type === "user") {
+    return;
+  }
+
+  const next = speechState.queue.shift();
+  if (!next) {
+    speechState.owner = null;
+    emitMicState();
+    return;
+  }
+
+  speechState.owner = { type: "agent", agentId: next.agentId };
+  speechState.active = next;
+  emitMicState();
+
+  runQwenTts(next)
+    .catch((error) => {
+      if (!next.cancelled) {
+        emitAgentOutput(next.agentId, "system", `Qwen text-to-speech failed: ${error.message}`);
+      }
+    })
+    .finally(() => {
+      if (speechState.active === next) {
+        speechState.active = null;
+      }
+
+      if (speechState.owner?.type === "agent" && speechState.owner.agentId === next.agentId) {
+        speechState.owner = null;
+      }
+
+      emitMicState();
+      pumpSpeechQueue();
+    });
+}
+
+async function runQwenTts(job) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-tts-"));
+  const outputPath = path.join(tempDir, "speech.wav");
+
+  try {
+    await runSpeechCommand(
+      path.join(repoRoot, "run"),
+      [job.text, "--output", outputPath, "--no-play"],
+      { cwd: repoRoot },
+      job
+    );
+    if (!job.cancelled) {
+      await runSpeechCommand("afplay", [outputPath], { cwd: repoRoot }, job);
+    }
+  } finally {
+    fs.rm(tempDir, { recursive: true, force: true }, () => {});
+  }
+}
+
+function runSpeechCommand(command, args, options, job = null) {
+  return new Promise((resolve, reject) => {
+    if (job?.cancelled) {
+      resolve();
+      return;
+    }
+
+    const child = spawn(command, args, {
+      ...options,
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+
+    if (job) {
+      job.child = child;
+    }
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (job?.child === child) {
+        job.child = null;
+      }
+
+      if (job?.cancelled) {
+        resolve();
+        return;
+      }
+
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(stderr.trim() || `speech command exited ${signal || `with code ${code}`}`));
+    });
+  });
+}
+
+function emitMicState() {
+  mainWindow?.webContents.send("mic:state", {
+    owner: speechState.owner
   });
 }
