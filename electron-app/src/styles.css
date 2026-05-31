@@ -113,6 +113,13 @@ input {
   font-weight: 780;
 }
 
+.relay-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+}
+
 .relay-toggle {
   display: inline-flex;
   align-items: center;
@@ -126,6 +133,65 @@ input {
 
 .relay-toggle input {
   cursor: pointer;
+}
+
+.relay-info-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 50%;
+  background: #fbfffb;
+  color: var(--line);
+  font-size: 11px;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  cursor: help;
+}
+
+.relay-info-tip:hover,
+.relay-info-tip:focus-visible {
+  background: #edf6ff;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--line-soft);
+}
+
+.relay-info-tooltip {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 30;
+  width: min(280px, 70vw);
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  text-align: left;
+  pointer-events: none;
+}
+
+.relay-info-tooltip p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.relay-info-tooltip p + p {
+  margin-top: 8px;
+}
+
+.relay-info-tip:hover .relay-info-tooltip,
+.relay-info-tip:focus-visible .relay-info-tooltip {
+  display: block;
 }
 
 .summary-list {
@@ -493,6 +559,20 @@ h1 {
 
   background: rgba(79,93,117,0.08);
   color: #1f2a44;
+}
+
+/* RELAY = incoming teammate summary */
+.chat-message.relay {
+  align-self: flex-start;
+
+  border-left: 3px solid var(--line);
+  padding-left: 10px;
+
+  background: rgba(27, 112, 201, 0.06);
+  color: #143f6e;
+
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 
 /* INPUT = editorial control bar */

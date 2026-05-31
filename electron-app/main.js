@@ -17,11 +17,53 @@ function isAckSummary(text) {
 }
 
 function extractSummary(text) {
-  const matches = [...text.matchAll(/^\s*Summary:\s*(.+)\s*$/gim)];
-  if (!matches.length) {
+  if (!text) {
     return null;
   }
-  return matches[matches.length - 1][1].trim();
+
+  const lineMatches = [...text.matchAll(/^\s*(?:#{1,6}\s*|\*{1,2})?Summary:\*{0,2}\s*(.+)$/gim)];
+  if (lineMatches.length) {
+    return lineMatches[lineMatches.length - 1][1].trim();
+  }
+
+  const inlineMatch = text.match(/(?:^|\n)\s*(?:#{1,6}\s*|\*{1,2})?Summary:\*{0,2}\s*(.+)$/is);
+  if (inlineMatch) {
+    return inlineMatch[1].trim();
+  }
+
+  return null;
+}
+
+function extractSummaryFromMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return null;
+  }
+
+  const parts = [];
+  for (const msg of messages) {
+    if (msg?.role !== "assistant" || !Array.isArray(msg.content)) {
+      continue;
+    }
+
+    for (const block of msg.content) {
+      if (block?.type === "text" && typeof block.text === "string") {
+        parts.push(block.text);
+      }
+    }
+  }
+
+  if (!parts.length) {
+    return null;
+  }
+
+  return extractSummary(parts.join("\n\n"));
+}
+
+function noteSummaryCandidate(agentProcess, text) {
+  const candidate = extractSummary(text);
+  if (candidate) {
+    agentProcess.lastSummaryText = candidate;
+  }
 }
 
 function createWindow() {
@@ -145,6 +187,7 @@ ipcMain.handle("agent:create", async (_event, payload) => {
     nextRequestId: 1,
     name: payload.agentName || `${roleLabel} #${payload.index}`,
     currentResponse: "",
+    lastSummaryText: null,
     incomingDepth: 0,
     skipNextBroadcast: false,
     systemPrompt: payload.systemPrompt || null
@@ -230,6 +273,8 @@ ipcMain.handle("agent:message", async (_event, payload) => {
   }
 
   agentProcess.incomingDepth = 0;
+  agentProcess.currentResponse = "";
+  agentProcess.lastSummaryText = null;
 
   sendRpcCommand(agentProcess, {
     type: "prompt",
@@ -395,7 +440,7 @@ function handleRpcMessage(agentProcess, rawLine) {
     case "agent_end":
       agentProcess.isStreaming = false;
       emitAgentStatus(agentProcess.id, "idle");
-      finalizeTurn(agentProcess);
+      finalizeTurn(agentProcess, message);
       break;
     case "message_update":
       handleMessageUpdate(agentProcess, message);
@@ -462,7 +507,12 @@ function handleMessageUpdate(agentProcess, message) {
   if (event.type === "text_delta" && event.delta) {
     const cleaned = cleanStreamingOutput(event.delta);
     agentProcess.currentResponse += cleaned;
+    noteSummaryCandidate(agentProcess, agentProcess.currentResponse);
     emitAgentOutput(agentProcess.id, "agent", event.delta, { append: true });
+  }
+
+  if (event.type === "text_end" && typeof event.content === "string" && event.content) {
+    noteSummaryCandidate(agentProcess, `${agentProcess.currentResponse}${cleanStreamingOutput(event.content)}`);
   }
 
   if (event.type === "error") {
@@ -551,9 +601,18 @@ function emitAgentSummary(payload) {
   mainWindow?.webContents.send("agent:summary", payload);
 }
 
-function finalizeTurn(agentProcess) {
-  const summaryText = extractSummary(agentProcess.currentResponse);
+function emitAgentRelay(payload) {
+  mainWindow?.webContents.send("agent:relay", payload);
+}
+
+function finalizeTurn(agentProcess, endMessage = null) {
+  const summaryText =
+    extractSummary(agentProcess.currentResponse) ||
+    agentProcess.lastSummaryText ||
+    extractSummaryFromMessages(endMessage?.messages);
+
   agentProcess.currentResponse = "";
+  agentProcess.lastSummaryText = null;
 
   if (agentProcess.skipNextBroadcast) {
     agentProcess.skipNextBroadcast = false;
@@ -561,8 +620,11 @@ function finalizeTurn(agentProcess) {
   }
 
   if (!summaryText) {
+    console.log("[main] finalizeTurn: no summary found for", agentProcess.name);
     return;
   }
+
+  console.log("[main] finalizeTurn: summary from", agentProcess.name, ":", summaryText.slice(0, 120));
 
   const timestamp = new Date().toISOString();
   const summaryPayload = {
@@ -591,6 +653,7 @@ function finalizeTurn(agentProcess) {
 
 function broadcastSummary(sender, summaryText, depth) {
   if (!relayEnabled) {
+    console.log("[main] broadcastSummary: relay disabled, skipping");
     return;
   }
 
@@ -602,8 +665,11 @@ function broadcastSummary(sender, summaryText, depth) {
     }
 
     if (target.child.killed || !target.child.stdin.writable) {
+      console.log("[main] broadcastSummary: skipping dead/unwritable agent", target.name);
       continue;
     }
+
+    console.log("[main] broadcastSummary: sending to", target.name);
 
     target.incomingDepth = depth;
 
@@ -611,6 +677,13 @@ function broadcastSummary(sender, summaryText, depth) {
       type: "prompt",
       message: buildAgentPrompt(target, relayMessage),
       ...(target.isStreaming ? { streamingBehavior: "steer" } : {})
+    });
+
+    emitAgentRelay({
+      id: targetId,
+      fromName: sender.name,
+      text: relayMessage,
+      depth
     });
   }
 }

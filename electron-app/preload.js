@@ -28,5 +28,10 @@ contextBridge.exposeInMainWorld("piFlow", {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("agent:summary", handler);
     return () => ipcRenderer.removeListener("agent:summary", handler);
+  },
+  onAgentRelay: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("agent:relay", handler);
+    return () => ipcRenderer.removeListener("agent:relay", handler);
   }
 });

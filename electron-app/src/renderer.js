@@ -605,4 +605,17 @@ window.piFlow.onAgentSummary((payload) => {
   appendSummaryEntry(payload);
 });
 
+window.piFlow.onAgentRelay((payload) => {
+  const agent = state.agents.find((item) => item.id === payload.id);
+  if (!agent) {
+    return;
+  }
+
+  agent.transcript.push({ role: "relay", text: payload.text });
+  const log = document.querySelector(`.chat-log[data-agent-id="${payload.id}"]`);
+  if (log) {
+    renderTranscript(log, agent.transcript);
+  }
+});
+
 showScreen("empty");
