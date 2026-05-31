@@ -132,6 +132,13 @@ async function chooseFolder() {
   setFolder(folder);
 }
 
+async function restoreStoredFolder() {
+  const storedState = await window.piFlow.getStoredState();
+  if (storedState.activeFolder) {
+    setFolder(storedState.activeFolder);
+  }
+}
+
 async function openRolePicker() {
   if (!state.folder) {
     return;
@@ -426,3 +433,4 @@ window.piFlow.onAgentModels((payload) => {
 });
 
 showScreen("empty");
+restoreStoredFolder();
